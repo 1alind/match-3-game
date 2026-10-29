@@ -177,7 +177,7 @@
         for (let x = 0; x < cols; x++) {
           const cx = Math.round((x + 0.5) * cellW);
           const cy = Math.round((y + 0.5) * cellH);
-          const sampleSize = Math.max(6, Math.min(cellW, cellH) * 0.32);
+          const sampleSize = Math.max(10, Math.min(cellW, cellH) * 0.24);
           const color = averageColorFromRect(imageData, {
             x: Math.max(0, cx - sampleSize),
             y: Math.max(0, cy - sampleSize),
@@ -221,6 +221,26 @@
     }
 
     function rgbToName(rgb) {
+      const r = rgb.r;
+      const g = rgb.g;
+      const b = rgb.b;
+
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const delta = max - min;
+      const sat = max === 0 ? 0 : delta / max;
+
+      // Strong blue detection first, because your game blue tiles are shaded and not pure #0000ff.
+      if (b > r + 20 && b > g + 20) return 'blue';
+      if (b > 120 && g > 90 && r < 120) return 'cyan';
+      if (r > b + 30 && r > g + 30) return 'red';
+      if (g > r + 30 && g > b + 30) return 'green';
+      if (r > 150 && g > 120 && b < 100) return 'orange';
+      if (r > 150 && g > 100 && b > 120) return 'purple';
+      if (r > 120 && g > 110 && b > 90 && sat < 0.35) return 'gray';
+      if (r > 150 && g > 120 && b > 120) return 'brown';
+      if (r > 180 && g > 180 && b > 180) return 'gray';
+
       const palette = {
         red: { r: 255, g: 0, b: 0 },
         green: { r: 0, g: 180, b: 0 },
@@ -243,7 +263,13 @@
           bestName = name;
         }
       }
-      return bestDist > 120 ? 'unknown' : bestName;
+
+      // Blue family needs more tolerance than all others.
+      if (bestName === 'blue' || bestName === 'cyan') {
+        return bestDist > 120 ? 'unknown' : bestName;
+      }
+
+      return bestDist > 90 ? 'unknown' : bestName;
     }
 
     function renderCategoryGrid(grid) {
@@ -291,7 +317,7 @@
           const drawX = x * cellW + 3;
           const drawY = y * cellH + 3;
           tmpCtx.fillStyle = 'rgba(0,0,0,0.45)';
-          tmpCtx.fillRect(drawX, drawY, 48, 18);
+          tmpCtx.fillRect(drawX, drawY, 52, 18);
           tmpCtx.fillStyle = '#ffffff';
           tmpCtx.font = '12px Arial';
           tmpCtx.fillText(cell.name, drawX + 4, drawY + 13);
