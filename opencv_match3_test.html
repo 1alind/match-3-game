@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Match3 Board only + Manual Goal</title>
+  <title>Match3 Template Goal Analyzer</title>
   <style>
     body {
       margin: 0;
@@ -11,7 +11,11 @@
       color: #e2e8f0;
       font-family: Arial, sans-serif;
     }
-    .wrap { max-width: 1200px; margin: 24px auto; padding: 16px; }
+    .wrap {
+      max-width: 1200px;
+      margin: 24px auto;
+      padding: 16px;
+    }
     .panel {
       background: #111827;
       border: 1px solid #334155;
@@ -19,8 +23,13 @@
       padding: 16px;
       margin-bottom: 16px;
     }
-    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-    input[type="file"], input[type="text"], button {
+    .row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    input[type="file"], button {
       border-radius: 8px;
       border: 1px solid #475569;
       padding: 10px 12px;
@@ -33,11 +42,14 @@
       cursor: pointer;
       font-weight: 600;
     }
-    button.secondary { background: #374151; }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.6fr) minmax(220px, 0.7fr);
+      gap: 16px;
+    }
     canvas {
       display: block;
       width: 100%;
-      max-width: 1200px;
       background: #020617;
       border: 1px solid #334155;
       border-radius: 10px;
@@ -49,7 +61,7 @@
       padding: 12px;
       color: #cbd5e1;
       overflow: auto;
-      max-height: 300px;
+      max-height: 320px;
       font-size: 12px;
     }
     .meta {
@@ -57,45 +69,41 @@
       border: 1px solid #334155;
       border-radius: 10px;
       padding: 12px;
-      margin-top: 12px;
       line-height: 1.6;
+      font-size: 14px;
     }
-    .layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); gap: 16px; }
+    .tiny {
+      max-width: 220px;
+      max-height: 220px;
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="panel">
       <div class="row">
-        <input type="file" id="fileInput" accept="image/*" />
-        <button id="loadBtn">Load Image</button>
-        <button id="targetCropBtn" class="secondary">Select Goal Crop</button>
+        <label>Board image: <input type="file" id="boardInput" accept="image/*" /></label>
+        <label>Target image: <input type="file" id="targetInput" accept="image/*" /></label>
         <button id="analyzeBtn">Analyze</button>
       </div>
       <div class="row" style="margin-top: 12px;">
-        <label>Manual target hex: <input id="targetHex" type="text" value="#ff0000" placeholder="#ff0000" /></label>
-        <button id="useManualHexBtn" class="secondary">Use Manual Target</button>
-      </div>
-      <div class="row" style="margin-top: 12px;">
-        <span id="statusText">Upload a board image first.</span>
+        <span id="statusText">Upload a board image and a target item image.</span>
       </div>
     </div>
 
     <div class="layout">
       <div class="panel">
-        <canvas id="canvas" width="900" height="700"></canvas>
+        <canvas id="boardCanvas" width="900" height="700"></canvas>
       </div>
 
       <div class="panel">
         <div class="meta">
-          <strong>How it works</strong><br>
-          - Use the entire uploaded image as the board.<br>
-          - Crop the target item manually and the script will use that color as the goal.<br>
-          - Or paste a target hex like #ff0000 if you know it.
+          <strong>Target image</strong><br>
+          <canvas id="targetCanvas" class="tiny" width="180" height="180"></canvas>
         </div>
         <div class="meta">
-          <strong>Goal crop</strong><br>
-          <span id="goalCropInfo">not set</span>
+          <strong>Target match info</strong><br>
+          <span id="targetMatchInfo">No target yet</span>
         </div>
         <div class="meta">
           <strong>Result</strong>
@@ -105,219 +113,184 @@
     </div>
   </div>
 
+  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();"></script>
   <script>
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-    const fileInput = document.getElementById('fileInput');
+    const boardCanvas = document.getElementById('boardCanvas');
+    const boardCtx = boardCanvas.getContext('2d');
+    const targetCanvas = document.getElementById('targetCanvas');
+    const targetCtx = targetCanvas.getContext('2d');
     const statusText = document.getElementById('statusText');
-    const goalCropInfo = document.getElementById('goalCropInfo');
+    const targetMatchInfo = document.getElementById('targetMatchInfo');
     const resultBox = document.getElementById('resultBox');
-    const targetHexInput = document.getElementById('targetHex');
 
-    let img = null;
-    let cropMode = 'goal';
-    let dragStart = null;
-    let draftRect = null;
-    let goalCropRect = null;
-    let manualTargetHex = null;
+    let boardImage = null;
+    let targetImage = null;
+    let opencvReady = false;
 
-    document.getElementById('loadBtn').addEventListener('click', () => {
-      if (!fileInput.files || !fileInput.files[0]) {
-        statusText.textContent = 'Choose an image first.';
-        return;
-      }
+    function onOpenCvReady() {
+      opencvReady = true;
+      statusText.textContent = 'OpenCV.js loaded. Upload board and target images.';
+    }
 
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const imgObj = new Image();
-        imgObj.onload = () => {
-          img = imgObj;
-          canvas.width = img.width;
-          canvas.height = img.height;
-          goalCropRect = null;
-          manualTargetHex = null;
-          drawImage();
-          statusText.textContent = 'Image loaded. Use the full image as board, or crop the goal item.';
-        };
-        imgObj.src = e.target.result;
-      };
-      reader.readAsDataURL(fileInput.files[0]);
+    document.getElementById('boardInput').addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      loadImageToCanvas(file, boardCanvas, (img) => {
+        boardImage = img;
+        statusText.textContent = 'Board image loaded.';
+      });
     });
 
-    document.getElementById('targetCropBtn').addEventListener('click', () => {
-      if (!img) {
-        statusText.textContent = 'Load an image first.';
-        return;
-      }
-      cropMode = 'goal';
-      statusText.textContent = 'Select a crop of the goal item on the image.';
-    });
-
-    document.getElementById('useManualHexBtn').addEventListener('click', () => {
-      const v = targetHexInput.value.trim();
-      if (!v) {
-        statusText.textContent = 'Enter a valid hex color like #ff0000';
-        return;
-      }
-      manualTargetHex = hexToRgb(v);
-      statusText.textContent = 'Manual target set. Click Analyze.';
-      drawImage();
+    document.getElementById('targetInput').addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      loadImageToCanvas(file, targetCanvas, (img) => {
+        targetImage = img;
+        statusText.textContent = 'Target image loaded.';
+      });
     });
 
     document.getElementById('analyzeBtn').addEventListener('click', () => {
-      if (!img) {
-        statusText.textContent = 'Load an image first.';
+      if (!boardImage || !targetImage) {
+        statusText.textContent = 'Upload both the board image and the target image.';
         return;
       }
+      if (!opencvReady) {
+        statusText.textContent = 'OpenCV.js still loading...';
+        return;
+      }
+      try {
+        analyzeImage();
+      } catch (err) {
+        statusText.textContent = 'Analysis failed: ' + err.message;
+      }
+    });
 
-      let targetColor = null;
-      if (manualTargetHex) {
-        targetColor = manualTargetHex;
-      } else if (goalCropRect) {
-        const src = getCanvasImageData();
-        targetColor = averageColorFromRect(src, goalCropRect);
+    function loadImageToCanvas(file, canvas, onReady) {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0);
+          onReady(img);
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function analyzeImage() {
+      const boardData = getCanvasImageData(boardCanvas);
+      const targetData = getCanvasImageData(targetCanvas);
+
+      const targetColor = averageColor(targetData);
+      const goalName = rgbToName(targetColor);
+      const boardMatrix = buildBoardMatrixFromWholeImage(boardData, 8, 8);
+      const goalMove = findBestMoveForColor(boardMatrix, goalName);
+
+      const matchResult = detectTemplateMatches(boardCanvas, targetCanvas);
+      const bestMatch = matchResult.matches[0] || null;
+
+      if (bestMatch) {
+        const x = Math.round(bestMatch.x + bestMatch.w / 2);
+        const y = Math.round(bestMatch.y + bestMatch.h / 2);
+        targetMatchInfo.textContent = `Best target match: x=${x}, y=${y}, confidence=${bestMatch.score.toFixed(3)}`;
       } else {
-        statusText.textContent = 'Select a goal crop or provide a manual target hex.';
-        return;
+        targetMatchInfo.textContent = 'No target match found above threshold.';
       }
-
-      const boardData = buildBoardMatrixFromWholeImage(getCanvasImageData(), 8, 8);
-      const move = findBestMoveForColor(boardData, rgbToName(targetColor));
 
       const result = {
-        board: { rows: 8, cols: 8 },
+        boardSize: { w: boardCanvas.width, h: boardCanvas.height },
+        targetSize: { w: targetCanvas.width, h: targetCanvas.height },
         goalColor: targetColor,
         goalHex: rgbToHex(targetColor.r, targetColor.g, targetColor.b),
-        from: move ? move.from : null,
-        to: move ? move.to : null,
-        score: move ? move.score : 0,
-        boardMatrix: boardData
+        goalName,
+        templateMatches: matchResult.matches.slice(0, 10),
+        move: goalMove ? goalMove : null,
+        boardMatrix: boardMatrix.map(row => row.map(cell => ({ x: cell.x, y: cell.y, name: cell.name, hex: cell.hex })))
       };
 
       resultBox.textContent = JSON.stringify(result, null, 2);
-      statusText.textContent = move
-        ? `Move found: from ${move.from.x},${move.from.y} to ${move.to.x},${move.to.y}`
-        : 'No valid move found for this goal.';
-    });
 
-    function drawImage() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (!img) return;
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      if (goalCropRect) drawRect(goalCropRect, 'rgba(245,158,11,0.9)', 'Goal Crop');
-      if (draftRect) drawRect(draftRect, 'rgba(59,130,246,0.9)', 'Draft');
-    }
-
-    function drawRect(rect, strokeStyle, label) {
-      ctx.save();
-      ctx.strokeStyle = strokeStyle;
-      ctx.lineWidth = 2;
-      ctx.setLineDash([8, 5]);
-      ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
-      ctx.setLineDash([]);
-      ctx.fillStyle = strokeStyle;
-      ctx.fillRect(rect.x, rect.y - 18, 80, 18);
-      ctx.fillStyle = '#ffffff';
-      ctx.font = '12px Arial';
-      ctx.fillText(label, rect.x + 6, rect.y - 4);
-      ctx.restore();
-    }
-
-    function toCanvasPoint(evt) {
-      const rect = canvas.getBoundingClientRect();
-      const scaleX = canvas.width / rect.width;
-      const scaleY = canvas.height / rect.height;
-      return {
-        x: (evt.clientX - rect.left) * scaleX,
-        y: (evt.clientY - rect.top) * scaleY
-      };
-    }
-
-    canvas.addEventListener('mousedown', (evt) => {
-      if (!img) return;
-      const p = toCanvasPoint(evt);
-      dragStart = p;
-      draftRect = { x: p.x, y: p.y, w: 0, h: 0 };
-      drawImage();
-    });
-
-    canvas.addEventListener('mousemove', (evt) => {
-      if (!dragStart) return;
-      const p = toCanvasPoint(evt);
-      draftRect = {
-        x: Math.min(dragStart.x, p.x),
-        y: Math.min(dragStart.y, p.y),
-        w: Math.abs(p.x - dragStart.x),
-        h: Math.abs(p.y - dragStart.y)
-      };
-      drawImage();
-    });
-
-    canvas.addEventListener('mouseup', () => {
-      if (!dragStart || !draftRect) return;
-      const rect = normalizeRect(draftRect);
-      if (cropMode === 'goal') {
-        goalCropRect = rect;
-        goalCropInfo.textContent = `${Math.round(rect.x)}, ${Math.round(rect.y)}, ${Math.round(rect.w)}x${Math.round(rect.h)}`;
+      if (goalMove) {
+        statusText.textContent = `Move found: from ${goalMove.from.x},${goalMove.from.y} to ${goalMove.to.x},${goalMove.to.y}`;
+      } else {
+        statusText.textContent = 'No valid move found using the target image.';
       }
-      dragStart = null;
-      draftRect = null;
-      drawImage();
-    });
-
-    function normalizeRect(r) {
-      return {
-        x: Math.max(0, Math.min(r.x, canvas.width)),
-        y: Math.max(0, Math.min(r.y, canvas.height)),
-        w: Math.max(1, Math.min(r.w, canvas.width - Math.min(r.x, canvas.width))),
-        h: Math.max(1, Math.min(r.h, canvas.height - Math.min(r.y, canvas.height)))
-      };
     }
 
-    function getCanvasImageData() {
-      const tmp = document.createElement('canvas');
-      tmp.width = canvas.width;
-      tmp.height = canvas.height;
-      const tctx = tmp.getContext('2d');
-      tctx.drawImage(img, 0, 0);
-      return tctx.getImageData(0, 0, tmp.width, tmp.height);
-    }
+    function detectTemplateMatches(boardCanvasEl, targetCanvasEl) {
+      const src = cv.imread(boardCanvasEl);
+      const tpl = cv.imread(targetCanvasEl);
 
-    function hexToRgb(hex) {
-      const h = hex.replace('#', '');
-      const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
-      const num = Number.parseInt(full, 16);
-      return {
-        r: (num >> 16) & 255,
-        g: (num >> 8) & 255,
-        b: num & 255
-      };
-    }
+      const srcGray = new cv.Mat();
+      const tplGray = new cv.Mat();
+      cv.cvtColor(src, srcGray, cv.COLOR_RGBA2GRAY, 0);
+      cv.cvtColor(tpl, tplGray, cv.COLOR_RGBA2GRAY, 0);
 
-    function rgbToHex(r, g, b) {
-      return '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
-    }
+      const result = new cv.Mat();
+      cv.matchTemplate(srcGray, tplGray, result, cv.TM_CCOEFF_NORMED);
 
-    function averageColorFromRect(imageData, rect) {
-      let r = 0, g = 0, b = 0, count = 0;
-      const x0 = Math.max(0, Math.min(Math.floor(rect.x), imageData.width));
-      const y0 = Math.max(0, Math.min(Math.floor(rect.y), imageData.height));
-      const x1 = Math.max(x0, Math.min(Math.ceil(rect.x + rect.w), imageData.width));
-      const y1 = Math.max(y0, Math.min(Math.ceil(rect.y + rect.h), imageData.height));
-      for (let y = y0; y < y1; y++) {
-        for (let x = x0; x < x1; x++) {
-          const idx = (y * imageData.width + x) * 4;
-          r += imageData.data[idx];
-          g += imageData.data[idx + 1];
-          b += imageData.data[idx + 2];
-          count++; 
+      const threshold = 0.65;
+      const matches = [];
+      const data = result.data32F;
+      const rows = result.rows;
+      const cols = result.cols;
+
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const score = data[y * cols + x];
+          if (score > threshold) {
+            matches.push({
+              x,
+              y,
+              w: tpl.cols,
+              h: tpl.rows,
+              score
+            });
+          }
         }
+      }
+
+      matches.sort((a, b) => b.score - a.score);
+
+      const best = matches.slice(0, 10);
+
+      src.delete();
+      tpl.delete();
+      srcGray.delete();
+      tplGray.delete();
+      result.delete();
+
+      return { matches: best };
+    }
+
+    function getCanvasImageData(canvas) {
+      const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+      return data;
+    }
+
+    function averageColor(imageData) {
+      let r = 0, g = 0, b = 0, count = 0;
+      for (let i = 0; i < imageData.data.length; i += 4) {
+        r += imageData.data[i];
+        g += imageData.data[i + 1];
+        b += imageData.data[i + 2];
+        count++;
       }
       return {
         r: r / count,
         g: g / count,
         b: b / count
       };
+    }
+
+    function rgbToHex(r, g, b) {
+      return '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
     }
 
     function rgbToName(rgb) {
@@ -346,6 +319,55 @@
       return bestDist > 120 ? 'unknown' : bestName;
     }
 
+    function buildBoardMatrixFromWholeImage(imageData, rows, cols) {
+      const grid = [];
+      const cellW = imageData.width / cols;
+      const cellH = imageData.height / rows;
+
+      for (let y = 0; y < rows; y++) {
+        const row = [];
+        for (let x = 0; x < cols; x++) {
+          const cx = Math.round((x + 0.5) * cellW);
+          const cy = Math.round((y + 0.5) * cellH);
+          const sampleSize = 6;
+          const color = averageColorFromRect(imageData, {
+            x: Math.max(0, cx - sampleSize),
+            y: Math.max(0, cy - sampleSize),
+            w: sampleSize * 2,
+            h: sampleSize * 2
+          });
+          const name = rgbToName(color);
+          row.push({
+            x,
+            y,
+            name,
+            hex: rgbToHex(color.r, color.g, color.b),
+            rgb: color
+          });
+        }
+        grid.push(row);
+      }
+      return grid;
+    }
+
+    function averageColorFromRect(imageData, rect) {
+      let r = 0, g = 0, b = 0, count = 0;
+      const x0 = Math.max(0, Math.min(Math.floor(rect.x), imageData.width));
+      const y0 = Math.max(0, Math.min(Math.floor(rect.y), imageData.height));
+      const x1 = Math.max(x0, Math.min(Math.ceil(rect.x + rect.w), imageData.width));
+      const y1 = Math.max(y0, Math.min(Math.ceil(rect.y + rect.h), imageData.height));
+      for (let y = y0; y < y1; y++) {
+        for (let x = x0; x < x1; x++) {
+          const idx = (y * imageData.width + x) * 4;
+          r += imageData.data[idx];
+          g += imageData.data[idx + 1];
+          b += imageData.data[idx + 2];
+          count++;
+        }
+      }
+      return { r: r / count, g: g / count, b: b / count };
+    }
+
     function cloneBoard(board) {
       return board.map(row => row.map(cell => ({ ...cell, name: cell.name })));
     }
@@ -371,30 +393,6 @@
         }
       }
       return runs;
-    }
-
-    function buildBoardMatrixFromWholeImage(imageData, rows, cols) {
-      const grid = [];
-      const cellW = imageData.width / cols;
-      const cellH = imageData.height / rows;
-      for (let y = 0; y < rows; y++) {
-        const row = [];
-        for (let x = 0; x < cols; x++) {
-          const cx = Math.round((x + 0.5) * cellW);
-          const cy = Math.round((y + 0.5) * cellH);
-          const sampleSize = 6;
-          const color = averageColorFromRect(imageData, {
-            x: Math.max(0, cx - sampleSize),
-            y: Math.max(0, cy - sampleSize),
-            w: sampleSize * 2,
-            h: sampleSize * 2
-          });
-          const name = rgbToName(color);
-          row.push({ x, y, name, hex: rgbToHex(color.r, color.g, color.b), rgb: color });
-        }
-        grid.push(row);
-      }
-      return grid;
     }
 
     function findBestMoveForColor(boardGrid, goalName) {
