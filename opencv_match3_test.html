@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Match3 Cell Classification Viewer</title>
+  <title>Match3 Sprite Solver</title>
   <style>
     body {
       margin: 0;
@@ -12,7 +12,7 @@
       font-family: Arial, sans-serif;
     }
     .wrap {
-      max-width: 1400px;
+      max-width: 1200px;
       margin: 24px auto;
       padding: 16px;
     }
@@ -29,23 +29,18 @@
       flex-wrap: wrap;
       align-items: center;
     }
-    input[type="file"], button {
+    input, select, button {
       border-radius: 8px;
       border: 1px solid #475569;
       padding: 10px 12px;
+      background: #0b1120;
+      color: white;
       font-size: 14px;
     }
     button {
       background: #2563eb;
-      color: white;
-      border: none;
       cursor: pointer;
       font-weight: 600;
-    }
-    .layout {
-      display: grid;
-      grid-template-columns: minmax(0, 1.8fr) minmax(260px, 0.8fr);
-      gap: 16px;
     }
     canvas {
       display: block;
@@ -72,21 +67,19 @@
       line-height: 1.6;
       font-size: 14px;
     }
-    .cell-grid {
+    .layout {
       display: grid;
-      grid-template-columns: repeat(8, minmax(24px, 1fr));
-      gap: 4px;
-      margin-top: 10px;
+      grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+      gap: 16px;
     }
-    .cell {
-      background: #111827;
+    .asset-preview {
+      width: 120px;
+      height: 120px;
       border: 1px solid #334155;
-      border-radius: 6px;
-      text-align: center;
-      padding: 8px 4px;
-      font-size: 11px;
-      min-height: 26px;
-      color: white;
+      border-radius: 8px;
+      background: #020617;
+      margin-top: 8px;
+      object-fit: contain;
     }
   </style>
 </head>
@@ -94,11 +87,20 @@
   <div class="wrap">
     <div class="panel">
       <div class="row">
-        <label>Board image: <input type="file" id="boardInput" accept="image/*" /></label>
-        <button id="analyzeBtn">Classify Cells</button>
+        <label>Board screenshot: <input type="file" id="boardInput" accept="image/*" /></label>
+        <label>Goal item:
+          <select id="goalSelect">
+            <option value="blue-jet">Blue Jet</option>
+            <option value="yellow-ship">Yellow Ship</option>
+            <option value="purple-sub">Purple Sub</option>
+            <option value="red-plane">Red Plane</option>
+            <option value="green-tank">Green Tank</option>
+          </select>
+        </label>
+        <button id="solveBtn">Solve</button>
       </div>
       <div class="row" style="margin-top: 12px;">
-        <span id="statusText">Upload a screenshot of the board.</span>
+        <span id="statusText">Upload a board screenshot and choose a goal item.</span>
       </div>
     </div>
 
@@ -109,25 +111,47 @@
 
       <div class="panel">
         <div class="meta">
-          <strong>Detected cell categories</strong>
-          <div id="cellGrid" class="cell-grid"></div>
+          <strong>Selected asset</strong><br>
+          <img id="assetPreview" class="asset-preview" src="assets/blue-jet.png" alt="goal preview" onerror="this.src='data:image/gif;base64,R0lGODlhAQABAAAAACwAAAAAAQABAAA='" />
         </div>
         <div class="meta">
-          <strong>Summary</strong>
+          <strong>Result</strong>
           <pre id="resultBox">{}</pre>
         </div>
       </div>
     </div>
   </div>
 
+  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();"></script>
   <script>
     const boardCanvas = document.getElementById('boardCanvas');
     const boardCtx = boardCanvas.getContext('2d');
+    const goalSelect = document.getElementById('goalSelect');
     const statusText = document.getElementById('statusText');
-    const cellGrid = document.getElementById('cellGrid');
     const resultBox = document.getElementById('resultBox');
+    const assetPreview = document.getElementById('assetPreview');
 
     let boardImage = null;
+    let opencvReady = false;
+
+    const itemMap = {
+      'blue-jet': 'assets/blue-jet.png',
+      'yellow-ship': 'assets/yellow-ship.png',
+      'purple-sub': 'assets/purple-sub.png',
+      'red-plane': 'assets/red-plane.png',
+      'green-tank': 'assets/green-tank.png'
+    };
+
+    function onOpenCvReady() {
+      opencvReady = true;
+      statusText.textContent = 'OpenCV.js loaded. Upload the board screenshot.';
+    }
+
+    goalSelect.addEventListener('change', () => {
+      const value = goalSelect.value;
+      const src = itemMap[value] || 'data:image/gif;base64,R0lGODlhAQABAAAAACwAAAAAAQABAAA=';
+      assetPreview.src = src;
+    });
 
     document.getElementById('boardInput').addEventListener('change', (e) => {
       const file = e.target.files && e.target.files[0];
@@ -141,191 +165,175 @@
           boardCanvas.height = img.height;
           boardCtx.clearRect(0, 0, boardCanvas.width, boardCanvas.height);
           boardCtx.drawImage(img, 0, 0, boardCanvas.width, boardCanvas.height);
-          statusText.textContent = 'Board image loaded. Click Classify Cells.';
+          statusText.textContent = 'Board screenshot loaded. Press Solve.';
         };
         img.src = ev.target.result;
       };
       reader.readAsDataURL(file);
     });
 
-    document.getElementById('analyzeBtn').addEventListener('click', () => {
+    document.getElementById('solveBtn').addEventListener('click', async () => {
       if (!boardImage) {
-        statusText.textContent = 'Upload a board image first.';
+        resultBox.textContent = JSON.stringify({ error: 'Upload the board image first.' }, null, 2);
         return;
       }
-      const imageData = boardCtx.getImageData(0, 0, boardCanvas.width, boardCanvas.height);
-      const rows = 8;
-      const cols = 8;
-      const grid = buildBoardMatrixFromWholeImage(imageData, rows, cols);
-      renderCategoryGrid(grid);
-      drawGridOverlay(grid, rows, cols);
-      const summary = {
-        rows,
-        cols,
-        grid: grid.map(r => r.map(c => ({ x: c.x, y: c.y, name: c.name, hex: c.hex })))
-      };
-      resultBox.textContent = JSON.stringify(summary, null, 2);
-      statusText.textContent = 'Board cells classified and shown below.';
+      if (!opencvReady) {
+        resultBox.textContent = JSON.stringify({ error: 'OpenCV.js is still loading.' }, null, 2);
+        return;
+      }
+
+      const goalKey = goalSelect.value;
+      const assetUrl = itemMap[goalKey];
+      if (!assetUrl) {
+        resultBox.textContent = JSON.stringify({ error: 'Pick a goal item.' }, null, 2);
+        return;
+      }
+
+      try {
+        const boardMat = cv.imread(boardCanvas);
+        const targetMat = await loadTemplateMat(assetUrl);
+        const matches = detectTemplateMatches(boardMat, targetMat, 0.78);
+        const boardMatrix = buildMatrixFromMatches(matches, 8, 8);
+        const move = findBestMoveForGoal(boardMatrix, goalKey);
+
+        const output = {
+          goal: goalKey,
+          asset: assetUrl,
+          matchCount: matches.length,
+          boardMatrix,
+          move: move ? move : null
+        };
+
+        resultBox.textContent = JSON.stringify(output, null, 2);
+        statusText.textContent = move ? `Move found: from ${move.from.x},${move.from.y} to ${move.to.x},${move.to.y}` : 'No valid move found.';
+      } catch (err) {
+        resultBox.textContent = JSON.stringify({ error: String(err) }, null, 2);
+      }
     });
 
-    function buildBoardMatrixFromWholeImage(imageData, rows, cols) {
-      const grid = [];
-      const cellW = imageData.width / cols;
-      const cellH = imageData.height / rows;
+    function loadTemplateMat(url) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const tempCanvas = document.createElement('canvas');
+          tempCanvas.width = img.width;
+          tempCanvas.height = img.height;
+          const tctx = tempCanvas.getContext('2d');
+          tctx.drawImage(img, 0, 0);
+          try {
+            const mat = cv.imread(tempCanvas);
+            resolve(mat);
+          } catch (e) {
+            reject(e);
+          }
+        };
+        img.onerror = () => reject(new Error('Could not load asset: ' + url));
+        img.src = url;
+      });
+    }
+
+    function detectTemplateMatches(boardMat, templateMat, threshold = 0.78) {
+      const result = new cv.Mat();
+      cv.matchTemplate(boardMat, templateMat, result, cv.TM_CCOEFF_NORMED);
+
+      const matches = [];
+      const cols = result.cols;
+      const rows = result.rows;
+      const data = result.data32F;
+
       for (let y = 0; y < rows; y++) {
-        const row = [];
         for (let x = 0; x < cols; x++) {
-          const cx = Math.round((x + 0.5) * cellW);
-          const cy = Math.round((y + 0.5) * cellH);
-          const sampleSize = Math.max(10, Math.min(cellW, cellH) * 0.24);
-          const color = averageColorFromRect(imageData, {
-            x: Math.max(0, cx - sampleSize),
-            y: Math.max(0, cy - sampleSize),
-            w: sampleSize * 2,
-            h: sampleSize * 2
-          });
-          const name = rgbToName(color);
-          row.push({
-            x,
-            y,
-            name,
-            hex: rgbToHex(color.r, color.g, color.b),
-            rgb: color
-          });
+          const score = data[y * cols + x];
+          if (score >= threshold) {
+            matches.push({
+              x,
+              y,
+              w: templateMat.cols,
+              h: templateMat.rows,
+              score
+            });
+          }
         }
-        grid.push(row);
       }
+
+      matches.sort((a, b) => b.score - a.score);
+      boardMat.delete();
+      templateMat.delete();
+      result.delete();
+      return matches;
+    }
+
+    function buildMatrixFromMatches(matches, rows, cols) {
+      const grid = Array.from({ length: rows }, () => Array(cols).fill(null));
+      const boardW = boardCanvas.width;
+      const boardH = boardCanvas.height;
+      const cellW = boardW / cols;
+      const cellH = boardH / rows;
+
+      for (const match of matches) {
+        const cx = match.x + match.w / 2;
+        const cy = match.y + match.h / 2;
+        const cellX = Math.floor(cx / cellW);
+        const cellY = Math.floor(cy / cellH);
+        if (cellX >= 0 && cellX < cols && cellY >= 0 && cellY < rows) {
+          grid[cellY][cellX] = 'goal';
+        }
+      }
+
       return grid;
     }
 
-    function averageColorFromRect(imageData, rect) {
-      let r = 0, g = 0, b = 0, count = 0;
-      const x0 = Math.max(0, Math.min(Math.floor(rect.x), imageData.width));
-      const y0 = Math.max(0, Math.min(Math.floor(rect.y), imageData.height));
-      const x1 = Math.max(x0, Math.min(Math.ceil(rect.x + rect.w), imageData.width));
-      const y1 = Math.max(y0, Math.min(Math.ceil(rect.y + rect.h), imageData.height));
-      for (let y = y0; y < y1; y++) {
-        for (let x = x0; x < x1; x++) {
-          const idx = (y * imageData.width + x) * 4;
-          r += imageData.data[idx];
-          g += imageData.data[idx + 1];
-          b += imageData.data[idx + 2];
-          count++;
+    function cloneGrid(grid) {
+      return grid.map(row => row.slice());
+    }
+
+    function swapCells(grid, a, b) {
+      const temp = grid[a.y][a.x];
+      grid[a.y][a.x] = grid[b.y][b.x];
+      grid[b.y][b.x] = temp;
+    }
+
+    function countGoalRuns(grid, goalKey) {
+      let runs = 0;
+      const rows = grid.length;
+      const cols = grid[0].length;
+
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x <= cols - 3; x++) {
+          if (grid[y][x] === goalKey && grid[y][x + 1] === goalKey && grid[y][x + 2] === goalKey) runs++;
         }
       }
-      return { r: r / count, g: g / count, b: b / count };
-    }
-
-    function rgbToHex(r, g, b) {
-      return '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
-    }
-
-    function rgbToName(rgb) {
-      const r = rgb.r;
-      const g = rgb.g;
-      const b = rgb.b;
-
-      const max = Math.max(r, g, b);
-      const min = Math.min(r, g, b);
-      const delta = max - min;
-      const sat = max === 0 ? 0 : delta / max;
-
-      // Strong blue detection first, because your game blue tiles are shaded and not pure #0000ff.
-      if (b > r + 20 && b > g + 20) return 'blue';
-      if (b > 120 && g > 90 && r < 120) return 'cyan';
-      if (r > b + 30 && r > g + 30) return 'red';
-      if (g > r + 30 && g > b + 30) return 'green';
-      if (r > 150 && g > 120 && b < 100) return 'orange';
-      if (r > 150 && g > 100 && b > 120) return 'purple';
-      if (r > 120 && g > 110 && b > 90 && sat < 0.35) return 'gray';
-      if (r > 150 && g > 120 && b > 120) return 'brown';
-      if (r > 180 && g > 180 && b > 180) return 'gray';
-
-      const palette = {
-        red: { r: 255, g: 0, b: 0 },
-        green: { r: 0, g: 180, b: 0 },
-        blue: { r: 0, g: 0, b: 255 },
-        yellow: { r: 255, g: 215, b: 0 },
-        purple: { r: 128, g: 0, b: 128 },
-        orange: { r: 255, g: 140, b: 0 },
-        pink: { r: 255, g: 105, b: 180 },
-        cyan: { r: 0, g: 255, b: 255 },
-        brown: { r: 139, g: 69, b: 19 },
-        gray: { r: 160, g: 160, b: 160 }
-      };
-
-      let bestName = 'unknown';
-      let bestDist = Infinity;
-      for (const [name, color] of Object.entries(palette)) {
-        const dist = Math.sqrt((rgb.r - color.r) ** 2 + (rgb.g - color.g) ** 2 + (rgb.b - color.b) ** 2);
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestName = name;
+      for (let x = 0; x < cols; x++) {
+        for (let y = 0; y <= rows - 3; y++) {
+          if (grid[y][x] === goalKey && grid[y + 1][x] === goalKey && grid[y + 2][x] === goalKey) runs++;
         }
       }
-
-      // Blue family needs more tolerance than all others.
-      if (bestName === 'blue' || bestName === 'cyan') {
-        return bestDist > 120 ? 'unknown' : bestName;
-      }
-
-      return bestDist > 90 ? 'unknown' : bestName;
+      return runs;
     }
 
-    function renderCategoryGrid(grid) {
-      cellGrid.innerHTML = '';
-      const flat = grid.flat();
-      for (const cell of flat) {
-        const div = document.createElement('div');
-        div.className = 'cell';
-        div.title = `${cell.name} / ${cell.hex}`;
-        div.textContent = cell.name;
-        div.style.background = cell.hex;
-        div.style.borderColor = '#000';
-        cellGrid.appendChild(div);
-      }
-    }
-
-    function drawGridOverlay(grid, rows, cols) {
-      const image = boardCtx.getImageData(0, 0, boardCanvas.width, boardCanvas.height);
-      const tmpCanvas = document.createElement('canvas');
-      tmpCanvas.width = boardCanvas.width;
-      tmpCanvas.height = boardCanvas.height;
-      const tmpCtx = tmpCanvas.getContext('2d');
-      tmpCtx.putImageData(image, 0, 0);
-
-      const cellW = boardCanvas.width / cols;
-      const cellH = boardCanvas.height / rows;
-      tmpCtx.strokeStyle = 'rgba(255,255,255,0.55)';
-      tmpCtx.lineWidth = 1;
-      for (let i = 0; i <= cols; i++) {
-        tmpCtx.beginPath();
-        tmpCtx.moveTo(i * cellW, 0);
-        tmpCtx.lineTo(i * cellW, boardCanvas.height);
-        tmpCtx.stroke();
-      }
-      for (let i = 0; i <= rows; i++) {
-        tmpCtx.beginPath();
-        tmpCtx.moveTo(0, i * cellH);
-        tmpCtx.lineTo(boardCanvas.width, i * cellH);
-        tmpCtx.stroke();
-      }
+    function findBestMoveForGoal(grid, goalKey) {
+      const rows = grid.length;
+      const cols = grid[0].length;
+      let best = null;
 
       for (let y = 0; y < rows; y++) {
         for (let x = 0; x < cols; x++) {
-          const cell = grid[y][x];
-          const drawX = x * cellW + 3;
-          const drawY = y * cellH + 3;
-          tmpCtx.fillStyle = 'rgba(0,0,0,0.45)';
-          tmpCtx.fillRect(drawX, drawY, 52, 18);
-          tmpCtx.fillStyle = '#ffffff';
-          tmpCtx.font = '12px Arial';
-          tmpCtx.fillText(cell.name, drawX + 4, drawY + 13);
+          const neighbors = [];
+          if (x + 1 < cols) neighbors.push({ x: x + 1, y });
+          if (y + 1 < rows) neighbors.push({ x, y: y + 1 });
+
+          for (const n of neighbors) {
+            const test = cloneGrid(grid);
+            swapCells(test, { x, y }, n);
+            const score = countGoalRuns(test, goalKey);
+            if (score > 0 && (!best || score > best.score)) {
+              best = { from: { x, y }, to: n, score };
+            }
+          }
         }
       }
 
-      boardCtx.clearRect(0, 0, boardCanvas.width, boardCanvas.height);
-      boardCtx.drawImage(tmpCanvas, 0, 0);
+      return best;
     }
   </script>
 </body>
