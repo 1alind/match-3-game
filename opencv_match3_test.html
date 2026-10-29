@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Match3 Template Goal Analyzer</title>
+  <title>Match3 Cell Classification Viewer</title>
   <style>
     body {
       margin: 0;
@@ -12,7 +12,7 @@
       font-family: Arial, sans-serif;
     }
     .wrap {
-      max-width: 1200px;
+      max-width: 1400px;
       margin: 24px auto;
       padding: 16px;
     }
@@ -44,7 +44,7 @@
     }
     .layout {
       display: grid;
-      grid-template-columns: minmax(0, 1.6fr) minmax(220px, 0.7fr);
+      grid-template-columns: minmax(0, 1.8fr) minmax(260px, 0.8fr);
       gap: 16px;
     }
     canvas {
@@ -61,7 +61,7 @@
       padding: 12px;
       color: #cbd5e1;
       overflow: auto;
-      max-height: 320px;
+      max-height: 420px;
       font-size: 12px;
     }
     .meta {
@@ -72,9 +72,21 @@
       line-height: 1.6;
       font-size: 14px;
     }
-    .tiny {
-      max-width: 220px;
-      max-height: 220px;
+    .cell-grid {
+      display: grid;
+      grid-template-columns: repeat(8, minmax(24px, 1fr));
+      gap: 4px;
+      margin-top: 10px;
+    }
+    .cell {
+      background: #111827;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      text-align: center;
+      padding: 8px 4px;
+      font-size: 11px;
+      min-height: 26px;
+      color: white;
     }
   </style>
 </head>
@@ -83,11 +95,10 @@
     <div class="panel">
       <div class="row">
         <label>Board image: <input type="file" id="boardInput" accept="image/*" /></label>
-        <label>Target image: <input type="file" id="targetInput" accept="image/*" /></label>
-        <button id="analyzeBtn">Analyze</button>
+        <button id="analyzeBtn">Classify Cells</button>
       </div>
       <div class="row" style="margin-top: 12px;">
-        <span id="statusText">Upload a board image and a target item image.</span>
+        <span id="statusText">Upload a screenshot of the board.</span>
       </div>
     </div>
 
@@ -98,238 +109,75 @@
 
       <div class="panel">
         <div class="meta">
-          <strong>Target image</strong><br>
-          <canvas id="targetCanvas" class="tiny" width="180" height="180"></canvas>
+          <strong>Detected cell categories</strong>
+          <div id="cellGrid" class="cell-grid"></div>
         </div>
         <div class="meta">
-          <strong>Target match info</strong><br>
-          <span id="targetMatchInfo">No target yet</span>
-        </div>
-        <div class="meta">
-          <strong>Result</strong>
+          <strong>Summary</strong>
           <pre id="resultBox">{}</pre>
         </div>
       </div>
     </div>
   </div>
 
-  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();"></script>
   <script>
     const boardCanvas = document.getElementById('boardCanvas');
     const boardCtx = boardCanvas.getContext('2d');
-    const targetCanvas = document.getElementById('targetCanvas');
-    const targetCtx = targetCanvas.getContext('2d');
     const statusText = document.getElementById('statusText');
-    const targetMatchInfo = document.getElementById('targetMatchInfo');
+    const cellGrid = document.getElementById('cellGrid');
     const resultBox = document.getElementById('resultBox');
 
     let boardImage = null;
-    let targetImage = null;
-    let opencvReady = false;
-
-    function onOpenCvReady() {
-      opencvReady = true;
-      statusText.textContent = 'OpenCV.js loaded. Upload board and target images.';
-    }
 
     document.getElementById('boardInput').addEventListener('change', (e) => {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
-      loadImageToCanvas(file, boardCanvas, (img) => {
-        boardImage = img;
-        statusText.textContent = 'Board image loaded.';
-      });
-    });
-
-    document.getElementById('targetInput').addEventListener('change', (e) => {
-      const file = e.target.files && e.target.files[0];
-      if (!file) return;
-      loadImageToCanvas(file, targetCanvas, (img) => {
-        targetImage = img;
-        statusText.textContent = 'Target image loaded.';
-      });
-    });
-
-    document.getElementById('analyzeBtn').addEventListener('click', () => {
-      if (!boardImage || !targetImage) {
-        statusText.textContent = 'Upload both the board image and the target image.';
-        return;
-      }
-      if (!opencvReady) {
-        statusText.textContent = 'OpenCV.js still loading...';
-        return;
-      }
-      try {
-        analyzeImage();
-      } catch (err) {
-        statusText.textContent = 'Analysis failed: ' + err.message;
-      }
-    });
-
-    function loadImageToCanvas(file, canvas, onReady) {
       const reader = new FileReader();
       reader.onload = (ev) => {
         const img = new Image();
         img.onload = () => {
-          canvas.width = img.width;
-          canvas.height = img.height;
-          const ctx = canvas.getContext('2d');
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(img, 0, 0);
-          onReady(img);
+          boardImage = img;
+          boardCanvas.width = img.width;
+          boardCanvas.height = img.height;
+          boardCtx.clearRect(0, 0, boardCanvas.width, boardCanvas.height);
+          boardCtx.drawImage(img, 0, 0, boardCanvas.width, boardCanvas.height);
+          statusText.textContent = 'Board image loaded. Click Classify Cells.';
         };
         img.src = ev.target.result;
       };
       reader.readAsDataURL(file);
-    }
+    });
 
-    function analyzeImage() {
-      const boardData = getCanvasImageData(boardCanvas);
-      const targetData = getCanvasImageData(targetCanvas);
-
-      const targetColor = averageColor(targetData);
-      const goalName = rgbToName(targetColor);
-      const boardMatrix = buildBoardMatrixFromWholeImage(boardData, 8, 8);
-      const goalMove = findBestMoveForColor(boardMatrix, goalName);
-
-      const matchResult = detectTemplateMatches(boardCanvas, targetCanvas);
-      const bestMatch = matchResult.matches[0] || null;
-
-      if (bestMatch) {
-        const x = Math.round(bestMatch.x + bestMatch.w / 2);
-        const y = Math.round(bestMatch.y + bestMatch.h / 2);
-        targetMatchInfo.textContent = `Best target match: x=${x}, y=${y}, confidence=${bestMatch.score.toFixed(3)}`;
-      } else {
-        targetMatchInfo.textContent = 'No target match found above threshold.';
+    document.getElementById('analyzeBtn').addEventListener('click', () => {
+      if (!boardImage) {
+        statusText.textContent = 'Upload a board image first.';
+        return;
       }
-
-      const result = {
-        boardSize: { w: boardCanvas.width, h: boardCanvas.height },
-        targetSize: { w: targetCanvas.width, h: targetCanvas.height },
-        goalColor: targetColor,
-        goalHex: rgbToHex(targetColor.r, targetColor.g, targetColor.b),
-        goalName,
-        templateMatches: matchResult.matches.slice(0, 10),
-        move: goalMove ? goalMove : null,
-        boardMatrix: boardMatrix.map(row => row.map(cell => ({ x: cell.x, y: cell.y, name: cell.name, hex: cell.hex })))
+      const imageData = boardCtx.getImageData(0, 0, boardCanvas.width, boardCanvas.height);
+      const rows = 8;
+      const cols = 8;
+      const grid = buildBoardMatrixFromWholeImage(imageData, rows, cols);
+      renderCategoryGrid(grid);
+      drawGridOverlay(grid, rows, cols);
+      const summary = {
+        rows,
+        cols,
+        grid: grid.map(r => r.map(c => ({ x: c.x, y: c.y, name: c.name, hex: c.hex })))
       };
-
-      resultBox.textContent = JSON.stringify(result, null, 2);
-
-      if (goalMove) {
-        statusText.textContent = `Move found: from ${goalMove.from.x},${goalMove.from.y} to ${goalMove.to.x},${goalMove.to.y}`;
-      } else {
-        statusText.textContent = 'No valid move found using the target image.';
-      }
-    }
-
-    function detectTemplateMatches(boardCanvasEl, targetCanvasEl) {
-      const src = cv.imread(boardCanvasEl);
-      const tpl = cv.imread(targetCanvasEl);
-
-      const srcGray = new cv.Mat();
-      const tplGray = new cv.Mat();
-      cv.cvtColor(src, srcGray, cv.COLOR_RGBA2GRAY, 0);
-      cv.cvtColor(tpl, tplGray, cv.COLOR_RGBA2GRAY, 0);
-
-      const result = new cv.Mat();
-      cv.matchTemplate(srcGray, tplGray, result, cv.TM_CCOEFF_NORMED);
-
-      const threshold = 0.65;
-      const matches = [];
-      const data = result.data32F;
-      const rows = result.rows;
-      const cols = result.cols;
-
-      for (let y = 0; y < rows; y++) {
-        for (let x = 0; x < cols; x++) {
-          const score = data[y * cols + x];
-          if (score > threshold) {
-            matches.push({
-              x,
-              y,
-              w: tpl.cols,
-              h: tpl.rows,
-              score
-            });
-          }
-        }
-      }
-
-      matches.sort((a, b) => b.score - a.score);
-
-      const best = matches.slice(0, 10);
-
-      src.delete();
-      tpl.delete();
-      srcGray.delete();
-      tplGray.delete();
-      result.delete();
-
-      return { matches: best };
-    }
-
-    function getCanvasImageData(canvas) {
-      const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
-      return data;
-    }
-
-    function averageColor(imageData) {
-      let r = 0, g = 0, b = 0, count = 0;
-      for (let i = 0; i < imageData.data.length; i += 4) {
-        r += imageData.data[i];
-        g += imageData.data[i + 1];
-        b += imageData.data[i + 2];
-        count++;
-      }
-      return {
-        r: r / count,
-        g: g / count,
-        b: b / count
-      };
-    }
-
-    function rgbToHex(r, g, b) {
-      return '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
-    }
-
-    function rgbToName(rgb) {
-      const palette = {
-        red: { r: 255, g: 0, b: 0 },
-        green: { r: 0, g: 180, b: 0 },
-        blue: { r: 0, g: 0, b: 255 },
-        yellow: { r: 255, g: 215, b: 0 },
-        purple: { r: 128, g: 0, b: 128 },
-        orange: { r: 255, g: 140, b: 0 },
-        pink: { r: 255, g: 105, b: 180 },
-        cyan: { r: 0, g: 255, b: 255 },
-        brown: { r: 139, g: 69, b: 19 },
-        gray: { r: 160, g: 160, b: 160 }
-      };
-
-      let bestName = 'unknown';
-      let bestDist = Infinity;
-      for (const [name, color] of Object.entries(palette)) {
-        const dist = Math.sqrt((rgb.r - color.r) ** 2 + (rgb.g - color.g) ** 2 + (rgb.b - color.b) ** 2);
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestName = name;
-        }
-      }
-      return bestDist > 120 ? 'unknown' : bestName;
-    }
+      resultBox.textContent = JSON.stringify(summary, null, 2);
+      statusText.textContent = 'Board cells classified and shown below.';
+    });
 
     function buildBoardMatrixFromWholeImage(imageData, rows, cols) {
       const grid = [];
       const cellW = imageData.width / cols;
       const cellH = imageData.height / rows;
-
       for (let y = 0; y < rows; y++) {
         const row = [];
         for (let x = 0; x < cols; x++) {
           const cx = Math.round((x + 0.5) * cellW);
           const cy = Math.round((y + 0.5) * cellH);
-          const sampleSize = 6;
+          const sampleSize = Math.max(6, Math.min(cellW, cellH) * 0.32);
           const color = averageColorFromRect(imageData, {
             x: Math.max(0, cx - sampleSize),
             y: Math.max(0, cy - sampleSize),
@@ -368,53 +216,90 @@
       return { r: r / count, g: g / count, b: b / count };
     }
 
-    function cloneBoard(board) {
-      return board.map(row => row.map(cell => ({ ...cell, name: cell.name })));
+    function rgbToHex(r, g, b) {
+      return '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
     }
 
-    function swap(board, a, b) {
-      const temp = board[a.y][a.x].name;
-      board[a.y][a.x].name = board[b.y][b.x].name;
-      board[b.y][b.x].name = temp;
+    function rgbToName(rgb) {
+      const palette = {
+        red: { r: 255, g: 0, b: 0 },
+        green: { r: 0, g: 180, b: 0 },
+        blue: { r: 0, g: 0, b: 255 },
+        yellow: { r: 255, g: 215, b: 0 },
+        purple: { r: 128, g: 0, b: 128 },
+        orange: { r: 255, g: 140, b: 0 },
+        pink: { r: 255, g: 105, b: 180 },
+        cyan: { r: 0, g: 255, b: 255 },
+        brown: { r: 139, g: 69, b: 19 },
+        gray: { r: 160, g: 160, b: 160 }
+      };
+
+      let bestName = 'unknown';
+      let bestDist = Infinity;
+      for (const [name, color] of Object.entries(palette)) {
+        const dist = Math.sqrt((rgb.r - color.r) ** 2 + (rgb.g - color.g) ** 2 + (rgb.b - color.b) ** 2);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestName = name;
+        }
+      }
+      return bestDist > 120 ? 'unknown' : bestName;
     }
 
-    function countGoalRuns(board, goalName) {
-      let runs = 0;
-      const rows = board.length;
-      const cols = board[0].length;
+    function renderCategoryGrid(grid) {
+      cellGrid.innerHTML = '';
+      const flat = grid.flat();
+      for (const cell of flat) {
+        const div = document.createElement('div');
+        div.className = 'cell';
+        div.title = `${cell.name} / ${cell.hex}`;
+        div.textContent = cell.name;
+        div.style.background = cell.hex;
+        div.style.borderColor = '#000';
+        cellGrid.appendChild(div);
+      }
+    }
+
+    function drawGridOverlay(grid, rows, cols) {
+      const image = boardCtx.getImageData(0, 0, boardCanvas.width, boardCanvas.height);
+      const tmpCanvas = document.createElement('canvas');
+      tmpCanvas.width = boardCanvas.width;
+      tmpCanvas.height = boardCanvas.height;
+      const tmpCtx = tmpCanvas.getContext('2d');
+      tmpCtx.putImageData(image, 0, 0);
+
+      const cellW = boardCanvas.width / cols;
+      const cellH = boardCanvas.height / rows;
+      tmpCtx.strokeStyle = 'rgba(255,255,255,0.55)';
+      tmpCtx.lineWidth = 1;
+      for (let i = 0; i <= cols; i++) {
+        tmpCtx.beginPath();
+        tmpCtx.moveTo(i * cellW, 0);
+        tmpCtx.lineTo(i * cellW, boardCanvas.height);
+        tmpCtx.stroke();
+      }
+      for (let i = 0; i <= rows; i++) {
+        tmpCtx.beginPath();
+        tmpCtx.moveTo(0, i * cellH);
+        tmpCtx.lineTo(boardCanvas.width, i * cellH);
+        tmpCtx.stroke();
+      }
+
       for (let y = 0; y < rows; y++) {
-        for (let x = 0; x <= cols - 3; x++) {
-          if (board[y][x].name === goalName && board[y][x + 1].name === goalName && board[y][x + 2].name === goalName) runs++;
+        for (let x = 0; x < cols; x++) {
+          const cell = grid[y][x];
+          const drawX = x * cellW + 3;
+          const drawY = y * cellH + 3;
+          tmpCtx.fillStyle = 'rgba(0,0,0,0.45)';
+          tmpCtx.fillRect(drawX, drawY, 48, 18);
+          tmpCtx.fillStyle = '#ffffff';
+          tmpCtx.font = '12px Arial';
+          tmpCtx.fillText(cell.name, drawX + 4, drawY + 13);
         }
       }
-      for (let x = 0; x < cols; x++) {
-        for (let y = 0; y <= rows - 3; y++) {
-          if (board[y][x].name === goalName && board[y + 1][x].name === goalName && board[y + 2][x].name === goalName) runs++;
-        }
-      }
-      return runs;
-    }
 
-    function findBestMoveForColor(boardGrid, goalName) {
-      if (!goalName || goalName === 'unknown') return null;
-      const board = cloneBoard(boardGrid);
-      let best = null;
-      for (let y = 0; y < board.length; y++) {
-        for (let x = 0; x < board[0].length; x++) {
-          const neighbors = [];
-          if (x + 1 < board[0].length) neighbors.push({ x: x + 1, y });
-          if (y + 1 < board.length) neighbors.push({ x, y: y + 1 });
-          for (const n of neighbors) {
-            const test = cloneBoard(board);
-            swap(test, { x, y }, n);
-            const score = countGoalRuns(test, goalName);
-            if (score > 0 && (!best || score > best.score)) {
-              best = { from: { x, y }, to: n, score };
-            }
-          }
-        }
-      }
-      return best;
+      boardCtx.clearRect(0, 0, boardCanvas.width, boardCanvas.height);
+      boardCtx.drawImage(tmpCanvas, 0, 0);
     }
   </script>
 </body>
