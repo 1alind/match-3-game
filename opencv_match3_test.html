@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Match3 Board Analyzer (OpenCV.js Test)</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --muted: #94a3b8;
+      --text: #e5e7eb;
+      --accent: #22c55e;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --border: #334155;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, sans-serif;
+    }
+
+    .wrap {
+      max-width: 1200px;
+      margin: 20px auto;
+      padding: 20px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+
+    input[type="file"], input[type="number"], button {
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      padding: 10px 12px;
+      font-size: 14px;
+    }
+
+    button {
+      background: #1d4ed8;
+      color: white;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    button.secondary {
+      background: #374151;
+    }
+
+    button.warn {
+      background: #d97706;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+      gap: 16px;
+    }
+
+    canvas {
+      width: 100%;
+      max-width: 980px;
+      background: #020617;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      display: block;
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .meta {
+      background: #0b1120;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      line-height: 1.5;
+      color: var(--text);
+      font-size: 14px;
+    }
+
+    pre {
+      background: #020617;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      color: #cbd5e1;
+      overflow: auto;
+      max-height: 300px;
+      margin: 0;
+      font-size: 12px;
+    }
+
+    .status {
+      color: var(--muted);
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel">
+      <div class="controls">
+        <input type="file" id="fileInput" accept="image/*" />
+        <button id="loadBtn">Load Image</button>
+        <button id="boardBtn" class="secondary">Set Board ROI</button>
+        <button id="goalBtn" class="warn">Set Goal ROI</button>
+        <button id="analyzeBtn">Analyze Board</button>
+      </div>
+      <div class="controls" style="margin-top: 12px;">
+        <label>Rows: <input id="rowsInput" type="number" value="8" min="3" max="20" style="width: 70px;" /></label>
+        <label>Cols: <input id="colsInput" type="number" value="8" min="3" max="20" style="width: 70px;" /></label>
+        <span class="status" id="statusText">Load an image first.</span>
+      </div>
+    </div>
+
+    <div class="layout">
+      <div class="panel">
+        <canvas id="canvas" width="900" height="700"></canvas>
+      </div>
+
+      <div class="sidebar">
+        <div class="meta">
+          <strong>How to use:</strong><br>
+          1. Upload the screenshot.<br>
+          2. Drag on the image to select the board area.<br>
+          3. Click “Set Board ROI”.<br>
+          4. Drag a smaller box around the goal item.<br>
+          5. Click “Set Goal ROI”.<br>
+          6. Click “Analyze Board”.
+        </div>
+
+        <div class="meta">
+          <strong>Detected ROI</strong><br>
+          Board: <span id="boardInfo">not set</span><br>
+          Goal: <span id="goalInfo">not set</span>
+        </div>
+
+        <div class="meta">
+          <strong>Goal color</strong><br>
+          <span id="goalColorText">unknown</span>
+        </div>
+
+        <div class="meta">
+          <strong>Result JSON</strong>
+          <pre id="resultBox">{}</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();"></script>
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    const fileInput = document.getElementById('fileInput');
+    const statusText = document.getElementById('statusText');
+    const boardInfo = document.getElementById('boardInfo');
+    const goalInfo = document.getElementById('goalInfo');
+    const goalColorText = document.getElementById('goalColorText');
+    const resultBox = document.getElementById('resultBox');
+
+    const rowsInput = document.getElementById('rowsInput');
+    const colsInput = document.getElementById('colsInput');
+
+    let img = null;
+    let boardROI = null;
+    let goalROI = null;
+    let opencvReady = false;
+    let mode = 'board';
+
+    let dragStart = null;
+    let draftRect = null;
+
+    function onOpenCvReady() {
+      opencvReady = true;
+      statusText.textContent = 'OpenCV.js loaded. Upload an image.';
+    }
+
+    document.getElementById('loadBtn').addEventListener('click', () => {
+      if (!fileInput.files || !fileInput.files[0]) {
+        statusText.textContent = 'Choose an image first.';
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const imgObj = new Image();
+        imgObj.onload = () => {
+          img = imgObj;
+          canvas.width = img.width;
+          canvas.height = img.height;
+          drawImage();
+          statusText.textContent = 'Image loaded. Select the board ROI.';
+        };
+        imgObj.src = e.target.result;
+      };
+      reader.readAsDataURL(fileInput.files[0]);
+    });
+
+    document.getElementById('boardBtn').addEventListener('click', () => {
+      mode = 'board';
+      statusText.textContent = 'Drag on the image to set the board ROI.';
+    });
+
+    document.getElementById('goalBtn').addEventListener('click', () => {
+      mode = 'goal';
+      statusText.textContent = 'Drag on the image to set the goal ROI.';
+    });
+
+    document.getElementById('analyzeBtn').addEventListener('click', () => {
+      if (!img) {
+        statusText.textContent = 'Load an image first.';
+        return;
+      }
+      if (!boardROI) {
+        statusText.textContent = 'Board ROI not set.';
+        return;
+      }
+      if (!goalROI) {
+        statusText.textContent = 'Goal ROI not set.';
+        return;
+      }
+
+      try {
+        analyzeBoard();
+      } catch (err) {
+        statusText.textContent = 'Analysis failed: ' + err.message;
+      }
+    });
+
+    function drawImage() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!img) return;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      if (boardROI) drawRect(boardROI, 'rgba(34,197,94,0.9)', 'Board ROI');
+      if (goalROI) drawRect(goalROI, 'rgba(245,158,11,0.9)', 'Goal ROI');
+      if (draftRect) drawRect(draftRect, 'rgba(59,130,246,0.9)', mode === 'board' ? 'Board Draft' : 'Goal Draft');
+    }
+
+    function drawRect(rect, strokeStyle, label) {
+      ctx.save();
+      ctx.strokeStyle = strokeStyle;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8, 5]);
+      ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+      ctx.setLineDash([]);
+      ctx.fillStyle = strokeStyle;
+      ctx.fillRect(rect.x, rect.y - 18, 90, 18);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '12px Arial';
+      ctx.fillText(label, rect.x + 6, rect.y - 4);
+      ctx.restore();
+    }
+
+    function toCanvasPoint(evt) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      return {
+        x: (evt.clientX - rect.left) * scaleX,
+        y: (evt.clientY - rect.top) * scaleY
+      };
+    }
+
+    canvas.addEventListener('mousedown', (evt) => {
+      if (!img) return;
+      const p = toCanvasPoint(evt);
+      dragStart = p;
+      draftRect = { x: p.x, y: p.y, w: 0, h: 0 };
+      drawImage();
+    });
+
+    canvas.addEventListener('mousemove', (evt) => {
+      if (!dragStart) return;
+      const p = toCanvasPoint(evt);
+      draftRect = {
+        x: Math.min(dragStart.x, p.x),
+        y: Math.min(dragStart.y, p.y),
+        w: Math.abs(p.x - dragStart.x),
+        h: Math.abs(p.y - dragStart.y)
+      };
+      drawImage();
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      if (!dragStart || !draftRect) return;
+      const rect = normalizeRect(draftRect);
+      if (mode === 'board') {
+        boardROI = rect;
+        boardInfo.textContent = `${Math.round(rect.x)}, ${Math.round(rect.y)}, ${Math.round(rect.w)}x${Math.round(rect.h)}`;
+      } else {
+        goalROI = rect;
+        goalInfo.textContent = `${Math.round(rect.x)}, ${Math.round(rect.y)}, ${Math.round(rect.w)}x${Math.round(rect.h)}`;
+      }
+      dragStart = null;
+      draftRect = null;
+      drawImage();
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      if (dragStart) {
+        dragStart = null;
+      }
+    });
+
+    function normalizeRect(r) {
+      return {
+        x: Math.max(0, Math.min(r.x, canvas.width)),
+        y: Math.max(0, Math.min(r.y, canvas.height)),
+        w: Math.max(1, Math.min(r.w, canvas.width - Math.min(r.x, canvas.width))),
+        h: Math.max(1, Math.min(r.h, canvas.height - Math.min(r.y, canvas.height)))
+      };
+    }
+
+    function averageColorAtRect(imageData, x, y, w, h) {
+      let r = 0, g = 0, b = 0, count = 0;
+      for (let yy = y; yy < y + h; yy++) {
+        for (let xx = x; xx < x + w; xx++) {
+          const idx = (yy * imageData.width + xx) * 4;
+          r += imageData.data[idx];
+          g += imageData.data[idx + 1];
+          b += imageData.data[idx + 2];
+          count++;
+        }
+      }
+      return {
+        r: r / count,
+        g: g / count,
+        b: b / count
+      };
+    }
+
+    function rgbToHex(r, g, b) {
+      return '#' + [r, g, b].map(v => {
+        const h = Math.round(v).toString(16).padStart(2, '0');
+        return h;
+      }).join('');
+    }
+
+    function colorDistance(a, b) {
+      return Math.sqrt(
+        (a.r - b.r) ** 2 +
+        (a.g - b.g) ** 2 +
+        (a.b - b.b) ** 2
+      );
+    }
+
+    function classifyColor(rgb) {
+      const palette = {
+        red: { r: 255, g: 0, b: 0 },
+        green: { r: 0, g: 180, b: 0 },
+        blue: { r: 0, g: 0, b: 255 },
+        yellow: { r: 255, g: 215, b: 0 },
+        purple: { r: 128, g: 0, b: 128 },
+        orange: { r: 255, g: 140, b: 0 },
+        brown: { r: 139, g: 69, b: 19 },
+        pink: { r: 255, g: 105, b: 180 },
+        cyan: { r: 0, g: 255, b: 255 },
+        gray: { r: 160, g: 160, b: 160 }
+      };
+
+      let bestName = 'unknown';
+      let bestDist = Infinity;
+      for (const [name, color] of Object.entries(palette)) {
+        const d = colorDistance(rgb, color);
+        if (d < bestDist) {
+          bestDist = d;
+          bestName = name;
+        }
+      }
+
+      // if everything is too far, keep unknown
+      if (bestDist > 120) {
+        bestName = 'unknown';
+      }
+      return bestName;
+    }
+
+    function getImageDataFromCanvas() {
+      const tmpCanvas = document.createElement('canvas');
+      tmpCanvas.width = canvas.width;
+      tmpCanvas.height = canvas.height;
+      const tmpCtx = tmpCanvas.getContext('2d');
+      tmpCtx.drawImage(img, 0, 0);
+      return tmpCtx.getImageData(0, 0, tmpCanvas.width, tmpCanvas.height);
+    }
+
+    function analyzeBoard() {
+      const rows = parseInt(rowsInput.value, 10) || 8;
+      const cols = parseInt(colsInput.value, 10) || 8;
+      const srcData = getImageDataFromCanvas();
+
+      const boardRect = boardROI;
+      const goalRect = goalROI;
+
+      const boardData = getCellGridData(srcData, boardRect, rows, cols);
+      const goalColor = estimateGoalColor(srcData, goalRect);
+
+      const move = findBestMoveForGoal(boardData, goalColor);
+
+      goalColorText.textContent = `${goalColor} (${rgbToHex(goalColor.r, goalColor.g, goalColor.b)})`;
+
+      const result = {
+        boardRows: rows,
+        boardCols: cols,
+        goalColor,
+        goalColorHex: rgbToHex(goalColor.r, goalColor.g, goalColor.b),
+        board: boardData,
+        from: move ? move.from : null,
+        to: move ? move.to : null,
+        score: move ? move.score : 0,
+        boardRect: {
+          x: Math.round(boardRect.x),
+          y: Math.round(boardRect.y),
+          w: Math.round(boardRect.w),
+          h: Math.round(boardRect.h)
+        },
+        goalRect: {
+          x: Math.round(goalRect.x),
+          y: Math.round(goalRect.y),
+          w: Math.round(goalRect.w),
+          h: Math.round(goalRect.h)
+        }
+      };
+
+      resultBox.textContent = JSON.stringify(result, null, 2);
+      statusText.textContent = move
+        ? `Move found: from ${move.from.x},${move.from.y} to ${move.to.x},${move.to.y}`
+        : 'No valid move found for this goal.';
+    }
+
+    function getCellGridData(imageData, rect, rows, cols) {
+      const grid = [];
+      const cellW = rect.w / cols;
+      const cellH = rect.h / rows;
+
+      for (let y = 0; y < rows; y++) {
+        const row = [];
+        for (let x = 0; x < cols; x++) {
+          const cx = Math.round(rect.x + x * cellW + cellW / 2);
+          const cy = Math.round(rect.y + y * cellH + cellH / 2);
+          const sampleSize = Math.max(4, Math.min(cellW, cellH) * 0.35);
+          const avg = averageColorAtRect(
+            imageData,
+            Math.max(0, cx - sampleSize / 2),
+            Math.max(0, cy - sampleSize / 2),
+            Math.max(3, sampleSize),
+            Math.max(3, sampleSize)
+          );
+          const name = classifyColor(avg);
+          row.push({
+            x,
+            y,
+            rgb: avg,
+            name,
+            hex: rgbToHex(avg.r, avg.g, avg.b),
+            center: { x: cx, y: cy }
+          });
+        }
+        grid.push(row);
+      }
+      return grid;
+    }
+
+    function estimateGoalColor(imageData, rect) {
+      const sampleW = Math.max(4, Math.floor(rect.w * 0.5));
+      const sampleH = Math.max(4, Math.floor(rect.h * 0.5));
+      const sx = Math.round(rect.x + rect.w * 0.25);
+      const sy = Math.round(rect.y + rect.h * 0.25);
+      const avg = averageColorAtRect(imageData, sx, sy, sampleW, sampleH);
+      const name = classifyColor(avg);
+      return {
+        ...avg,
+        name
+      };
+    }
+
+    function cloneBoard(board) {
+      return board.map(row => row.map(cell => ({ ...cell, name: cell.name })));
+    }
+
+    function swap(board, a, b) {
+      const tmp = board[a.y][a.x].name;
+      board[a.y][a.x].name = board[b.y][b.x].name;
+      board[b.y][b.x].name = tmp;
+    }
+
+    function countGoalRuns(board, goalName) {
+      let runs = 0;
+      const rows = board.length;
+      const cols = board[0].length;
+
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x <= cols - 3; x++) {
+          if (
+            board[y][x].name === goalName &&
+            board[y][x + 1].name === goalName &&
+            board[y][x + 2].name === goalName
+          ) {
+            runs++;
+          }
+        }
+      }
+
+      for (let x = 0; x < cols; x++) {
+        for (let y = 0; y <= rows - 3; y++) {
+          if (
+            board[y][x].name === goalName &&
+            board[y + 1][x].name === goalName &&
+            board[y + 2][x].name === goalName
+          ) {
+            runs++;
+          }
+        }
+      }
+
+      return runs;
+    }
+
+    function findBestMoveForGoal(boardGrid, goalColor) {
+      const board = cloneBoard(boardGrid);
+      const goalName = goalColor.name || 'unknown';
+
+      if (goalName === 'unknown') {
+        return null;
+      }
+
+      let best = null;
+
+      for (let y = 0; y < board.length; y++) {
+        for (let x = 0; x < board[0].length; x++) {
+          const neighbors = [];
+          if (x + 1 < board[0].length) neighbors.push({ x: x + 1, y });
+          if (y + 1 < board.length) neighbors.push({ x, y: y + 1 });
+
+          for (const n of neighbors) {
+            const test = cloneBoard(board);
+            swap(test, { x, y }, n);
+            const score = countGoalRuns(test, goalName);
+
+            if (score > 0) {
+              if (!best || score > best.score) {
+                best = {
+                  from: { x, y },
+                  to: n,
+                  score
+                };
+              }
+            }
+          }
+        }
+      }
+
+      return best;
+    }
+  </script>
+</body>
+</html>
