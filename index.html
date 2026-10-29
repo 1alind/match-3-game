@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Match3 Sprite Solver</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --panel: #111827;
+        --panel-2: #0b1120;
+        --line: #334155;
+        --text: #e2e8f0;
+        --muted: #cbd5e1;
+        --accent: #2563eb;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .wrap {
+        max-width: 1200px;
+        margin: 24px auto;
+        padding: 16px;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+
+      .row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+
+      input, button {
+        border-radius: 8px;
+        border: 1px solid #475569;
+        padding: 10px 12px;
+        background: var(--panel-2);
+        color: white;
+        font-size: 14px;
+      }
+
+      button {
+        background: var(--accent);
+        border: none;
+        cursor: pointer;
+        font-weight: 600;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1.8fr) minmax(260px, 0.8fr);
+        gap: 16px;
+      }
+
+      canvas {
+        display: block;
+        width: 100%;
+        background: #020617;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+      }
+
+      pre {
+        background: #020617;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px;
+        color: var(--muted);
+        overflow: auto;
+        max-height: 420px;
+        font-size: 12px;
+      }
+
+      .meta {
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px;
+        line-height: 1.6;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="panel">
+        <div class="row">
+          <label>Board screenshot: <input type="file" id="boardInput" accept="image/*" /></label>
+          <label>Goal item PNG: <input type="file" id="goalInput" accept="image/*" /></label>
+          <button id="solveBtn">Solve</button>
+        </div>
+        <div class="row" style="margin-top: 12px;">
+          <span id="statusText">Upload the board screenshot and the goal item PNG.</span>
+        </div>
+      </div>
+
+      <div class="layout">
+        <div class="panel">
+          <canvas id="boardCanvas" width="900" height="700"></canvas>
+        </div>
+
+        <div class="panel">
+          <div class="meta">
+            <strong>Goal PNG preview</strong><br>
+            <canvas id="goalCanvas" width="180" height="180"></canvas>
+          </div>
+          <div class="meta">
+            <strong>Result</strong>
+            <pre id="resultBox">{}</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();"></script>
+    <script>
+      const boardCanvas = document.getElementById('boardCanvas');
+      const boardCtx = boardCanvas.getContext('2d');
+      const goalCanvas = document.getElementById('goalCanvas');
+      const goalCtx = goalCanvas.getContext('2d');
+      const statusText = document.getElementById('statusText');
+      const resultBox = document.getElementById('resultBox');
+
+      let boardImage = null;
+      let goalImage = null;
+      let cvReady = false;
+
+      function onOpenCvReady() {
+        cvReady = true;
+        statusText.textContent = 'OpenCV.js loaded. Upload the board and goal images.';
+      }
+
+      document.getElementById('boardInput').addEventListener('change', (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        loadFileToCanvas(file, boardCanvas, (img) => {
+          boardImage = img;
+          statusText.textContent = 'Board uploaded. Now upload the goal PNG.';
+        });
+      });
+
+      document.getElementById('goalInput').addEventListener('change', (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        loadFileToCanvas(file, goalCanvas, (img) => {
+          goalImage = img;
+          statusText.textContent = 'Goal image loaded. Press Solve.';
+        });
+      });
+
+      document.getElementById('solveBtn').addEventListener('click', () => {
+        if (!boardImage) {
+          resultBox.textContent = JSON.stringify({ error: 'Upload the board screenshot first.' }, null, 2);
+          return;
+        }
+        if (!goalImage) {
+          resultBox.textContent = JSON.stringify({ error: 'Upload the goal item PNG first.' }, null, 2);
+          return;
+        }
+        if (!cvReady) {
+          resultBox.textContent = JSON.stringify({ error: 'OpenCV.js is still loading.' }, null, 2);
+          return;
+        }
+
+        try {
+          const boardMat = cv.imread(boardCanvas);
+          const goalMat = cv.imread(goalCanvas);
+          const matches = detectTemplateMatches(boardMat, goalMat, 0.78);
+          const grid = buildGridFromMatches(matches, 8, 8, boardCanvas.width, boardCanvas.height);
+          const move = findBestMoveForGoal(grid, 'goal');
+
+          const output = {
+            boardSize: { width: boardCanvas.width, height: boardCanvas.height },
+            goalSize: { width: goalCanvas.width, height: goalCanvas.height },
+            matchCount: matches.length,
+            boardMatrix: grid,
+            move: move ? move : null
+          };
+
+          resultBox.textContent = JSON.stringify(output, null, 2);
+
+          if (move) {
+            statusText.textContent = `Move found: from ${move.from.x},${move.from.y} to ${move.to.x},${move.to.y}`;
+          } else {
+            statusText.textContent = 'No valid move found for this goal item.';
+          }
+        } catch (err) {
+          resultBox.textContent = JSON.stringify({ error: String(err) }, null, 2);
+        }
+      });
+
+      function loadFileToCanvas(file, canvas, onReady) {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const img = new Image();
+          img.onload = () => {
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            onReady(img);
+          };
+          img.src = ev.target.result;
+        };
+        reader.readAsDataURL(file);
+      }
+
+      function detectTemplateMatches(boardMat, goalMat, threshold = 0.78) {
+        const result = new cv.Mat();
+        cv.matchTemplate(boardMat, goalMat, result, cv.TM_CCOEFF_NORMED);
+
+        const matches = [];
+        const rows = result.rows;
+        const cols = result.cols;
+        const data = result.data32F;
+
+        for (let y = 0; y < rows; y++) {
+          for (let x = 0; x < cols; x++) {
+            const score = data[y * cols + x];
+            if (score >= threshold) {
+              matches.push({
+                x,
+                y,
+                w: goalMat.cols,
+                h: goalMat.rows,
+                score
+              });
+            }
+          }
+        }
+
+        matches.sort((a, b) => b.score - a.score);
+        return matches;
+      }
+
+      function buildGridFromMatches(matches, rows, cols, boardW, boardH) {
+        const grid = Array.from({ length: rows }, () => Array(cols).fill(null));
+        const cellW = boardW / cols;
+        const cellH = boardH / rows;
+
+        for (const match of matches) {
+          const cx = match.x + match.w / 2;
+          const cy = match.y + match.h / 2;
+          const cellX = Math.floor(cx / cellW);
+          const cellY = Math.floor(cy / cellH);
+
+          if (cellX >= 0 && cellX < cols && cellY >= 0 && cellY < rows) {
+            grid[cellY][cellX] = 'goal';
+          }
+        }
+
+        return grid;
+      }
+
+      function cloneGrid(grid) {
+        return grid.map(row => row.slice());
+      }
+
+      function swapCells(grid, a, b) {
+        const temp = grid[a.y][a.x];
+        grid[a.y][a.x] = grid[b.y][b.x];
+        grid[b.y][b.x] = temp;
+      }
+
+      function countGoalRuns(grid) {
+        let runs = 0;
+        const rows = grid.length;
+        const cols = grid[0].length;
+
+        for (let y = 0; y < rows; y++) {
+          for (let x = 0; x <= cols - 3; x++) {
+            if (grid[y][x] === 'goal' && grid[y][x + 1] === 'goal' && grid[y][x + 2] === 'goal') {
+              runs++;
+            }
+          }
+        }
+
+        for (let x = 0; x < cols; x++) {
+          for (let y = 0; y <= rows - 3; y++) {
+            if (grid[y][x] === 'goal' && grid[y + 1][x] === 'goal' && grid[y + 2][x] === 'goal') {
+              runs++;
+            }
+          }
+        }
+
+        return runs;
+      }
+
+      function findBestMoveForGoal(grid, goalKey) {
+        const rows = grid.length;
+        const cols = grid[0].length;
+        let best = null;
+
+        for (let y = 0; y < rows; y++) {
+          for (let x = 0; x < cols; x++) {
+            const neighbors = [];
+            if (x + 1 < cols) neighbors.push({ x: x + 1, y });
+            if (y + 1 < rows) neighbors.push({ x, y: y + 1 });
+
+            for (const n of neighbors) {
+              const test = cloneGrid(grid);
+              swapCells(test, { x, y }, n);
+              const score = countGoalRuns(test);
+
+              if (score > 0 && (!best || score > best.score)) {
+                best = {
+                  from: { x, y },
+                  to: n,
+                  score
+                };
+              }
+            }
+          }
+        }
+
+        return best;
+      }
+    </script>
+  </body>
+</html>
