@@ -3,22 +3,33 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Match3 Sprite Solver</title>
+  <title>Match3 Sprite Extractor</title>
   <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --panel-2: #0b1120;
+      --line: #334155;
+      --text: #e2e8f0;
+      --muted: #cbd5e1;
+      --accent: #2563eb;
+    }
+
+    * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: #0f172a;
-      color: #e2e8f0;
+      background: var(--bg);
+      color: var(--text);
       font-family: Arial, sans-serif;
     }
     .wrap {
-      max-width: 1200px;
+      max-width: 1400px;
       margin: 24px auto;
       padding: 16px;
     }
     .panel {
-      background: #111827;
-      border: 1px solid #334155;
+      background: var(--panel);
+      border: 1px solid var(--line);
       border-radius: 12px;
       padding: 16px;
       margin-bottom: 16px;
@@ -32,13 +43,14 @@
     input, select, button {
       border-radius: 8px;
       border: 1px solid #475569;
-      padding: 10px 12px;
-      background: #0b1120;
+      background: var(--panel-2);
       color: white;
+      padding: 10px 12px;
       font-size: 14px;
     }
     button {
-      background: #2563eb;
+      background: var(--accent);
+      border: none;
       cursor: pointer;
       font-weight: 600;
     }
@@ -46,40 +58,49 @@
       display: block;
       width: 100%;
       background: #020617;
-      border: 1px solid #334155;
+      border: 1px solid var(--line);
       border-radius: 10px;
     }
     pre {
       background: #020617;
-      border: 1px solid #334155;
+      border: 1px solid var(--line);
       border-radius: 10px;
       padding: 12px;
-      color: #cbd5e1;
+      color: var(--muted);
       overflow: auto;
-      max-height: 420px;
+      max-height: 360px;
       font-size: 12px;
     }
     .meta {
-      background: #0b1120;
-      border: 1px solid #334155;
+      background: var(--panel-2);
+      border: 1px solid var(--line);
       border-radius: 10px;
       padding: 12px;
       line-height: 1.6;
       font-size: 14px;
     }
-    .layout {
+    .sprite-grid {
       display: grid;
-      grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
-      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
     }
-    .asset-preview {
-      width: 120px;
-      height: 120px;
-      border: 1px solid #334155;
-      border-radius: 8px;
+    .sprite-card {
+      background: #0b1120;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      text-align: center;
+    }
+    .sprite-card canvas {
+      width: 100%;
+      max-width: 110px;
+      display: inline-block;
       background: #020617;
+    }
+    .sprite-card button {
       margin-top: 8px;
-      object-fit: contain;
+      width: 100%;
     }
   </style>
 </head>
@@ -87,20 +108,22 @@
   <div class="wrap">
     <div class="panel">
       <div class="row">
-        <label>Board screenshot: <input type="file" id="boardInput" accept="image/*" /></label>
-        <label>Goal item:
-          <select id="goalSelect">
-            <option value="blue-jet">Blue Jet</option>
-            <option value="yellow-ship">Yellow Ship</option>
-            <option value="purple-sub">Purple Sub</option>
-            <option value="red-plane">Red Plane</option>
-            <option value="green-tank">Green Tank</option>
+        <label>Board source:
+          <select id="boardSource">
+            <option value="upload">Upload custom board</option>
+            <option value="patterns/screenshot_1793014635612.png">pattern_1</option>
+            <option value="patterns/screenshot_1793191335868.png">pattern_2</option>
+            <option value="patterns/screenshot_1793238845738.png">pattern_3</option>
+            <option value="patterns/screenshot_1793238875527.png">pattern_4</option>
+            <option value="patterns/screenshot_1793239074687.png">pattern_5</option>
+            <option value="patterns/screenshot_1793239165920.png">pattern_6</option>
           </select>
         </label>
-        <button id="solveBtn">Solve</button>
+        <label>Board upload: <input type="file" id="boardInput" accept="image/*" /></label>
+        <button id="extractBtn">Extract unique sprites</button>
       </div>
       <div class="row" style="margin-top: 12px;">
-        <span id="statusText">Upload a board screenshot and choose a goal item.</span>
+        <span id="statusText">Load a board screenshot or choose a pattern screenshot.</span>
       </div>
     </div>
 
@@ -108,232 +131,243 @@
       <div class="panel">
         <canvas id="boardCanvas" width="900" height="700"></canvas>
       </div>
-
       <div class="panel">
         <div class="meta">
-          <strong>Selected asset</strong><br>
-          <img id="assetPreview" class="asset-preview" src="assets/blue-jet.png" alt="goal preview" onerror="this.src='data:image/gif;base64,R0lGODlhAQABAAAAACwAAAAAAQABAAA='" />
-        </div>
-        <div class="meta">
-          <strong>Result</strong>
-          <pre id="resultBox">{}</pre>
+          <strong>Extracted sprite PNGs</strong>
+          <div id="spriteGrid" class="sprite-grid"></div>
         </div>
       </div>
     </div>
+
+    <div class="panel">
+      <pre id="debugBox">{}</pre>
+    </div>
   </div>
 
-  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();"></script>
   <script>
     const boardCanvas = document.getElementById('boardCanvas');
     const boardCtx = boardCanvas.getContext('2d');
-    const goalSelect = document.getElementById('goalSelect');
+    const spriteGrid = document.getElementById('spriteGrid');
     const statusText = document.getElementById('statusText');
-    const resultBox = document.getElementById('resultBox');
-    const assetPreview = document.getElementById('assetPreview');
+    const debugBox = document.getElementById('debugBox');
+    const boardSource = document.getElementById('boardSource');
 
-    let boardImage = null;
-    let opencvReady = false;
+    let currentImage = null;
+    let extractedTiles = [];
 
-    const itemMap = {
-      'blue-jet': 'assets/blue-jet.png',
-      'yellow-ship': 'assets/yellow-ship.png',
-      'purple-sub': 'assets/purple-sub.png',
-      'red-plane': 'assets/red-plane.png',
-      'green-tank': 'assets/green-tank.png'
-    };
-
-    function onOpenCvReady() {
-      opencvReady = true;
-      statusText.textContent = 'OpenCV.js loaded. Upload the board screenshot.';
-    }
-
-    goalSelect.addEventListener('change', () => {
-      const value = goalSelect.value;
-      const src = itemMap[value] || 'data:image/gif;base64,R0lGODlhAQABAAAAACwAAAAAAQABAAA=';
-      assetPreview.src = src;
+    boardSource.addEventListener('change', async () => {
+      const value = boardSource.value;
+      if (value === 'upload') {
+        statusText.textContent = 'Upload a custom board screenshot.';
+        return;
+      }
+      try {
+        const img = await loadImageFromUrl(value);
+        currentImage = img;
+        boardCanvas.width = img.width;
+        boardCanvas.height = img.height;
+        boardCtx.clearRect(0, 0, boardCanvas.width, boardCanvas.height);
+        boardCtx.drawImage(img, 0, 0, boardCanvas.width, boardCanvas.height);
+        statusText.textContent = 'Pattern board loaded: ' + value;
+      } catch (err) {
+        statusText.textContent = 'Failed to load pattern: ' + value;
+      }
     });
 
     document.getElementById('boardInput').addEventListener('change', (e) => {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const img = new Image();
-        img.onload = () => {
-          boardImage = img;
-          boardCanvas.width = img.width;
-          boardCanvas.height = img.height;
-          boardCtx.clearRect(0, 0, boardCanvas.width, boardCanvas.height);
-          boardCtx.drawImage(img, 0, 0, boardCanvas.width, boardCanvas.height);
-          statusText.textContent = 'Board screenshot loaded. Press Solve.';
-        };
-        img.src = ev.target.result;
-      };
-      reader.readAsDataURL(file);
+      loadFileToCanvas(file, boardCanvas, (img) => {
+        currentImage = img;
+        statusText.textContent = 'Board uploaded successfully.';
+      });
     });
 
-    document.getElementById('solveBtn').addEventListener('click', async () => {
-      if (!boardImage) {
-        resultBox.textContent = JSON.stringify({ error: 'Upload the board image first.' }, null, 2);
-        return;
-      }
-      if (!opencvReady) {
-        resultBox.textContent = JSON.stringify({ error: 'OpenCV.js is still loading.' }, null, 2);
+    document.getElementById('extractBtn').addEventListener('click', () => {
+      if (!currentImage) {
+        statusText.textContent = 'Load a board image first.';
         return;
       }
 
-      const goalKey = goalSelect.value;
-      const assetUrl = itemMap[goalKey];
-      if (!assetUrl) {
-        resultBox.textContent = JSON.stringify({ error: 'Pick a goal item.' }, null, 2);
-        return;
-      }
+      const extracted = extractUniqueTiles(currentImage);
+      extractedTiles = extracted;
+      renderSpriteCards(extracted);
 
-      try {
-        const boardMat = cv.imread(boardCanvas);
-        const targetMat = await loadTemplateMat(assetUrl);
-        const matches = detectTemplateMatches(boardMat, targetMat, 0.78);
-        const boardMatrix = buildMatrixFromMatches(matches, 8, 8);
-        const move = findBestMoveForGoal(boardMatrix, goalKey);
+      const summary = extracted.map((item, idx) => ({
+        index: idx,
+        label: item.label,
+        width: item.canvas.width,
+        height: item.canvas.height,
+        dataUrlPrefix: item.dataUrl.substring(0, 60) + '...'
+      }));
 
-        const output = {
-          goal: goalKey,
-          asset: assetUrl,
-          matchCount: matches.length,
-          boardMatrix,
-          move: move ? move : null
-        };
-
-        resultBox.textContent = JSON.stringify(output, null, 2);
-        statusText.textContent = move ? `Move found: from ${move.from.x},${move.from.y} to ${move.to.x},${move.to.y}` : 'No valid move found.';
-      } catch (err) {
-        resultBox.textContent = JSON.stringify({ error: String(err) }, null, 2);
-      }
+      debugBox.textContent = JSON.stringify(summary, null, 2);
+      statusText.textContent = 'Extracted ' + extracted.length + ' unique sprite PNGs.';
     });
 
-    function loadTemplateMat(url) {
+    function loadImageFromUrl(url) {
       return new Promise((resolve, reject) => {
         const img = new Image();
-        img.onload = () => {
-          const tempCanvas = document.createElement('canvas');
-          tempCanvas.width = img.width;
-          tempCanvas.height = img.height;
-          const tctx = tempCanvas.getContext('2d');
-          tctx.drawImage(img, 0, 0);
-          try {
-            const mat = cv.imread(tempCanvas);
-            resolve(mat);
-          } catch (e) {
-            reject(e);
-          }
-        };
-        img.onerror = () => reject(new Error('Could not load asset: ' + url));
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('Failed to load ' + url));
         img.src = url;
       });
     }
 
-    function detectTemplateMatches(boardMat, templateMat, threshold = 0.78) {
-      const result = new cv.Mat();
-      cv.matchTemplate(boardMat, templateMat, result, cv.TM_CCOEFF_NORMED);
+    function loadFileToCanvas(file, canvas, onReady) {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          onReady(img);
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
 
-      const matches = [];
-      const cols = result.cols;
-      const rows = result.rows;
-      const data = result.data32F;
+    function extractUniqueTiles(image) {
+      const rows = 8;
+      const cols = 8;
+      const cellW = image.width / cols;
+      const cellH = image.height / rows;
+      const samples = [];
 
       for (let y = 0; y < rows; y++) {
         for (let x = 0; x < cols; x++) {
-          const score = data[y * cols + x];
-          if (score >= threshold) {
-            matches.push({
-              x,
-              y,
-              w: templateMat.cols,
-              h: templateMat.rows,
-              score
-            });
-          }
+          const sx = Math.floor(x * cellW + cellW * 0.18);
+          const sy = Math.floor(y * cellH + cellH * 0.18);
+          const sw = Math.max(8, Math.floor(cellW * 0.64));
+          const sh = Math.max(8, Math.floor(cellH * 0.64));
+          const tileCanvas = document.createElement('canvas');
+          tileCanvas.width = sw;
+          tileCanvas.height = sh;
+          const tctx = tileCanvas.getContext('2d');
+          tctx.drawImage(image, sx, sy, sw, sh, 0, 0, sw, sh);
+
+          const avg = averageColor(tileCanvas);
+          const label = classifyColor(avg);
+          samples.push({
+            x,
+            y,
+            label,
+            canvas: tileCanvas
+          });
         }
       }
 
-      matches.sort((a, b) => b.score - a.score);
-      boardMat.delete();
-      templateMat.delete();
-      result.delete();
-      return matches;
-    }
-
-    function buildMatrixFromMatches(matches, rows, cols) {
-      const grid = Array.from({ length: rows }, () => Array(cols).fill(null));
-      const boardW = boardCanvas.width;
-      const boardH = boardCanvas.height;
-      const cellW = boardW / cols;
-      const cellH = boardH / rows;
-
-      for (const match of matches) {
-        const cx = match.x + match.w / 2;
-        const cy = match.y + match.h / 2;
-        const cellX = Math.floor(cx / cellW);
-        const cellY = Math.floor(cy / cellH);
-        if (cellX >= 0 && cellX < cols && cellY >= 0 && cellY < rows) {
-          grid[cellY][cellX] = 'goal';
+      const groups = [];
+      const seen = new Map();
+      for (const sample of samples) {
+        const key = sample.label;
+        if (!seen.has(key)) {
+          seen.set(key, groups.length);
+          groups.push({
+            label: key,
+            canvases: [sample.canvas]
+          });
+        } else {
+          groups[seen.get(key)].canvases.push(sample.canvas);
         }
       }
 
-      return grid;
-    }
+      return groups.map((group, idx) => {
+        const merged = document.createElement('canvas');
+        const maxW = Math.max(...group.canvases.map(c => c.width));
+        const maxH = Math.max(...group.canvases.map(c => c.height));
+        merged.width = maxW;
+        merged.height = maxH;
+        const mctx = merged.getContext('2d');
+        mctx.clearRect(0, 0, merged.width, merged.height);
 
-    function cloneGrid(grid) {
-      return grid.map(row => row.slice());
-    }
+        const centerX = Math.floor(merged.width / 2);
+        const centerY = Math.floor(merged.height / 2);
 
-    function swapCells(grid, a, b) {
-      const temp = grid[a.y][a.x];
-      grid[a.y][a.x] = grid[b.y][b.x];
-      grid[b.y][b.x] = temp;
-    }
-
-    function countGoalRuns(grid, goalKey) {
-      let runs = 0;
-      const rows = grid.length;
-      const cols = grid[0].length;
-
-      for (let y = 0; y < rows; y++) {
-        for (let x = 0; x <= cols - 3; x++) {
-          if (grid[y][x] === goalKey && grid[y][x + 1] === goalKey && grid[y][x + 2] === goalKey) runs++;
+        for (let i = 0; i < group.canvases.length; i++) {
+          const v = group.canvases[i];
+          const offsetX = (i % 3) * 8;
+          const offsetY = Math.floor(i / 3) * 8;
+          mctx.drawImage(v, offsetX, offsetY);
         }
-      }
-      for (let x = 0; x < cols; x++) {
-        for (let y = 0; y <= rows - 3; y++) {
-          if (grid[y][x] === goalKey && grid[y + 1][x] === goalKey && grid[y + 2][x] === goalKey) runs++;
-        }
-      }
-      return runs;
+
+        const dataUrl = merged.toDataURL('image/png');
+        return {
+          label: group.label + '_' + idx,
+          canvas: merged,
+          dataUrl
+        };
+      });
     }
 
-    function findBestMoveForGoal(grid, goalKey) {
-      const rows = grid.length;
-      const cols = grid[0].length;
-      let best = null;
-
-      for (let y = 0; y < rows; y++) {
-        for (let x = 0; x < cols; x++) {
-          const neighbors = [];
-          if (x + 1 < cols) neighbors.push({ x: x + 1, y });
-          if (y + 1 < rows) neighbors.push({ x, y: y + 1 });
-
-          for (const n of neighbors) {
-            const test = cloneGrid(grid);
-            swapCells(test, { x, y }, n);
-            const score = countGoalRuns(test, goalKey);
-            if (score > 0 && (!best || score > best.score)) {
-              best = { from: { x, y }, to: n, score };
-            }
-          }
-        }
+    function averageColor(canvas) {
+      const ctx = canvas.getContext('2d');
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+      let r = 0, g = 0, b = 0, count = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const alpha = data[i + 3];
+        if (alpha < 10) continue;
+        r += data[i];
+        g += data[i + 1];
+        b += data[i + 2];
+        count++;
       }
+      if (!count) return { r: 0, g: 0, b: 0 };
+      return { r: r / count, g: g / count, b: b / count };
+    }
 
-      return best;
+    function classifyColor(c) {
+      const r = c.r, g = c.g, b = c.b;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const delta = max - min;
+      const sat = max === 0 ? 0 : delta / max;
+
+      if (b > r + 20 && b > g + 20) return 'blue';
+      if (b > 120 && g > 80 && r < 140) return 'cyan';
+      if (r > g + 30 && r > b + 30) return 'red';
+      if (g > r + 30 && g > b + 30) return 'green';
+      if (r > 150 && g > 100 && b < 100) return 'orange';
+      if (r > 140 && g > 120 && b > 120) return 'purple';
+      if (sat < 0.22 && max > 70) return 'gray';
+      if (r > 160 && g > 150 && b > 100) return 'brown';
+      return 'unknown';
+    }
+
+    function renderSpriteCards(items) {
+      spriteGrid.innerHTML = '';
+      for (const item of items) {
+        const card = document.createElement('div');
+        card.className = 'sprite-card';
+
+        const label = document.createElement('div');
+        label.textContent = item.label;
+        label.style.marginBottom = '8px';
+
+        const preview = document.createElement('canvas');
+        preview.width = item.canvas.width;
+        preview.height = item.canvas.height;
+        preview.getContext('2d').drawImage(item.canvas, 0, 0);
+
+        const btn = document.createElement('button');
+        btn.textContent = 'Download PNG';
+        btn.onclick = () => {
+          const link = document.createElement('a');
+          link.href = item.dataUrl;
+          link.download = item.label + '.png';
+          link.click();
+        };
+
+        card.appendChild(label);
+        card.appendChild(preview);
+        card.appendChild(btn);
+        spriteGrid.appendChild(card);
+      }
     }
   </script>
 </body>
