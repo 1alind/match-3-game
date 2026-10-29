@@ -3,19 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Match3 Auto Analyzer</title>
+  <title>Match3 Board only + Manual Goal</title>
   <style>
     body {
       margin: 0;
-      font-family: Arial, sans-serif;
       background: #0f172a;
       color: #e2e8f0;
+      font-family: Arial, sans-serif;
     }
-    .wrap {
-      max-width: 1200px;
-      margin: 24px auto;
-      padding: 16px;
-    }
+    .wrap { max-width: 1200px; margin: 24px auto; padding: 16px; }
     .panel {
       background: #111827;
       border: 1px solid #334155;
@@ -23,7 +19,8 @@
       padding: 16px;
       margin-bottom: 16px;
     }
-    input[type="file"], button {
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    input[type="file"], input[type="text"], button {
       border-radius: 8px;
       border: 1px solid #475569;
       padding: 10px 12px;
@@ -36,22 +33,16 @@
       cursor: pointer;
       font-weight: 600;
     }
-    .row {
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
+    button.secondary { background: #374151; }
     canvas {
       display: block;
       width: 100%;
-      max-width: 980px;
+      max-width: 1200px;
       background: #020617;
       border: 1px solid #334155;
       border-radius: 10px;
     }
     pre {
-      margin: 0;
       background: #020617;
       border: 1px solid #334155;
       border-radius: 10px;
@@ -66,18 +57,10 @@
       border: 1px solid #334155;
       border-radius: 10px;
       padding: 12px;
+      margin-top: 12px;
       line-height: 1.6;
-      font-size: 14px;
     }
-    .layout {
-      display: grid;
-      grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
-      gap: 16px;
-    }
-    .status {
-      color: #cbd5e1;
-      font-size: 13px;
-    }
+    .layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); gap: 16px; }
   </style>
 </head>
 <body>
@@ -85,10 +68,16 @@
     <div class="panel">
       <div class="row">
         <input type="file" id="fileInput" accept="image/*" />
-        <button id="loadBtn">Analyze Image</button>
+        <button id="loadBtn">Load Image</button>
+        <button id="targetCropBtn" class="secondary">Select Goal Crop</button>
+        <button id="analyzeBtn">Analyze</button>
       </div>
       <div class="row" style="margin-top: 12px;">
-        <span class="status" id="statusText">Waiting for image...</span>
+        <label>Manual target hex: <input id="targetHex" type="text" value="#ff0000" placeholder="#ff0000" /></label>
+        <button id="useManualHexBtn" class="secondary">Use Manual Target</button>
+      </div>
+      <div class="row" style="margin-top: 12px;">
+        <span id="statusText">Upload a board image first.</span>
       </div>
     </div>
 
@@ -97,23 +86,17 @@
         <canvas id="canvas" width="900" height="700"></canvas>
       </div>
 
-      <div class="sidebar">
+      <div class="panel">
         <div class="meta">
-          <strong>Auto ROIs</strong><br>
-          Board: x=55..1025, y=859..1835<br>
-          Goal: x=571..834, y=198..470
+          <strong>How it works</strong><br>
+          - Use the entire uploaded image as the board.<br>
+          - Crop the target item manually and the script will use that color as the goal.<br>
+          - Or paste a target hex like #ff0000 if you know it.
         </div>
-
         <div class="meta">
-          <strong>Board ROI</strong><br>
-          <span id="boardInfo">not set</span>
+          <strong>Goal crop</strong><br>
+          <span id="goalCropInfo">not set</span>
         </div>
-
-        <div class="meta">
-          <strong>Goal ROI</strong><br>
-          <span id="goalInfo">not set</span>
-        </div>
-
         <div class="meta">
           <strong>Result</strong>
           <pre id="resultBox">{}</pre>
@@ -122,36 +105,21 @@
     </div>
   </div>
 
-  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();"></script>
   <script>
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     const fileInput = document.getElementById('fileInput');
     const statusText = document.getElementById('statusText');
-    const boardInfo = document.getElementById('boardInfo');
-    const goalInfo = document.getElementById('goalInfo');
+    const goalCropInfo = document.getElementById('goalCropInfo');
     const resultBox = document.getElementById('resultBox');
+    const targetHexInput = document.getElementById('targetHex');
 
     let img = null;
-    let opencvReady = false;
-
-    const DEFAULT_BOARD = { x: 55, y: 859, w: 970, h: 976 };
-    const DEFAULT_GOAL = { x: 571, y: 198, w: 263, h: 272 };
-
-    function clampRectToImage(rect, w, h) {
-      const x = Math.max(0, Math.min(rect.x, w - 1));
-      const y = Math.max(0, Math.min(rect.y, h - 1));
-      const x2 = Math.max(x, Math.min(rect.x + rect.w, w));
-      const y2 = Math.max(y, Math.min(rect.y + rect.h, h));
-      const finalW = Math.max(1, x2 - x);
-      const finalH = Math.max(1, y2 - y);
-      return { x, y, w: finalW, h: finalH };
-    }
-
-    function onOpenCvReady() {
-      opencvReady = true;
-      statusText.textContent = 'OpenCV loaded. Upload any image.';
-    }
+    let cropMode = 'goal';
+    let dragStart = null;
+    let draftRect = null;
+    let goalCropRect = null;
+    let manualTargetHex = null;
 
     document.getElementById('loadBtn').addEventListener('click', () => {
       if (!fileInput.files || !fileInput.files[0]) {
@@ -166,23 +134,78 @@
           img = imgObj;
           canvas.width = img.width;
           canvas.height = img.height;
+          goalCropRect = null;
+          manualTargetHex = null;
           drawImage();
-          analyzeImage();
+          statusText.textContent = 'Image loaded. Use the full image as board, or crop the goal item.';
         };
         imgObj.src = e.target.result;
       };
       reader.readAsDataURL(fileInput.files[0]);
     });
 
+    document.getElementById('targetCropBtn').addEventListener('click', () => {
+      if (!img) {
+        statusText.textContent = 'Load an image first.';
+        return;
+      }
+      cropMode = 'goal';
+      statusText.textContent = 'Select a crop of the goal item on the image.';
+    });
+
+    document.getElementById('useManualHexBtn').addEventListener('click', () => {
+      const v = targetHexInput.value.trim();
+      if (!v) {
+        statusText.textContent = 'Enter a valid hex color like #ff0000';
+        return;
+      }
+      manualTargetHex = hexToRgb(v);
+      statusText.textContent = 'Manual target set. Click Analyze.';
+      drawImage();
+    });
+
+    document.getElementById('analyzeBtn').addEventListener('click', () => {
+      if (!img) {
+        statusText.textContent = 'Load an image first.';
+        return;
+      }
+
+      let targetColor = null;
+      if (manualTargetHex) {
+        targetColor = manualTargetHex;
+      } else if (goalCropRect) {
+        const src = getCanvasImageData();
+        targetColor = averageColorFromRect(src, goalCropRect);
+      } else {
+        statusText.textContent = 'Select a goal crop or provide a manual target hex.';
+        return;
+      }
+
+      const boardData = buildBoardMatrixFromWholeImage(getCanvasImageData(), 8, 8);
+      const move = findBestMoveForColor(boardData, rgbToName(targetColor));
+
+      const result = {
+        board: { rows: 8, cols: 8 },
+        goalColor: targetColor,
+        goalHex: rgbToHex(targetColor.r, targetColor.g, targetColor.b),
+        from: move ? move.from : null,
+        to: move ? move.to : null,
+        score: move ? move.score : 0,
+        boardMatrix: boardData
+      };
+
+      resultBox.textContent = JSON.stringify(result, null, 2);
+      statusText.textContent = move
+        ? `Move found: from ${move.from.x},${move.from.y} to ${move.to.x},${move.to.y}`
+        : 'No valid move found for this goal.';
+    });
+
     function drawImage() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (!img) return;
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-      const board = clampRectToImage(DEFAULT_BOARD, canvas.width, canvas.height);
-      const goal = clampRectToImage(DEFAULT_GOAL, canvas.width, canvas.height);
-      drawRect(board, 'rgba(34,197,94,0.9)', 'Board');
-      drawRect(goal, 'rgba(245,158,11,0.9)', 'Goal');
+      if (goalCropRect) drawRect(goalCropRect, 'rgba(245,158,11,0.9)', 'Goal Crop');
+      if (draftRect) drawRect(draftRect, 'rgba(59,130,246,0.9)', 'Draft');
     }
 
     function drawRect(rect, strokeStyle, label) {
@@ -200,62 +223,58 @@
       ctx.restore();
     }
 
-    function analyzeImage() {
-      if (!img) {
-        statusText.textContent = 'No image loaded.';
-        return;
-      }
-
-      if (!opencvReady) {
-        statusText.textContent = 'OpenCV not ready yet.';
-        return;
-      }
-
-      const rows = 8;
-      const cols = 8;
-      const src = getImageDataFromCanvas();
-
-      const boardRect = clampRectToImage(DEFAULT_BOARD, canvas.width, canvas.height);
-      const goalRect = clampRectToImage(DEFAULT_GOAL, canvas.width, canvas.height);
-
-      const boardData = getCellGridData(src, boardRect, rows, cols);
-      const goal = estimateGoalColor(src, goalRect);
-      const move = findBestMoveForGoal(boardData, goal);
-
-      boardInfo.textContent = `${boardRect.x}, ${boardRect.y}, ${boardRect.w}x${boardRect.h}`;
-      goalInfo.textContent = `${goalRect.x}, ${goalRect.y}, ${goalRect.w}x${goalRect.h}`;
-
-      const result = {
-        board: {
-          rows,
-          cols,
-          roi: boardRect
-        },
-        goal: {
-          name: goal.name,
-          rgb: goal.rgb,
-          hex: goal.hex,
-          roi: goalRect
-        },
-        move: move ? move : null,
-        boardMatrix: boardData.map(row => row.map(v => ({
-          x: v.x,
-          y: v.y,
-          name: v.name,
-          hex: v.hex
-        })))
+    function toCanvasPoint(evt) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      return {
+        x: (evt.clientX - rect.left) * scaleX,
+        y: (evt.clientY - rect.top) * scaleY
       };
-
-      resultBox.textContent = JSON.stringify(result, null, 2);
-
-      if (move) {
-        statusText.textContent = `Move found: from ${move.from.x},${move.from.y} to ${move.to.x},${move.to.y}`;
-      } else {
-        statusText.textContent = 'No valid match move found for the detected goal.';
-      }
     }
 
-    function getImageDataFromCanvas() {
+    canvas.addEventListener('mousedown', (evt) => {
+      if (!img) return;
+      const p = toCanvasPoint(evt);
+      dragStart = p;
+      draftRect = { x: p.x, y: p.y, w: 0, h: 0 };
+      drawImage();
+    });
+
+    canvas.addEventListener('mousemove', (evt) => {
+      if (!dragStart) return;
+      const p = toCanvasPoint(evt);
+      draftRect = {
+        x: Math.min(dragStart.x, p.x),
+        y: Math.min(dragStart.y, p.y),
+        w: Math.abs(p.x - dragStart.x),
+        h: Math.abs(p.y - dragStart.y)
+      };
+      drawImage();
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      if (!dragStart || !draftRect) return;
+      const rect = normalizeRect(draftRect);
+      if (cropMode === 'goal') {
+        goalCropRect = rect;
+        goalCropInfo.textContent = `${Math.round(rect.x)}, ${Math.round(rect.y)}, ${Math.round(rect.w)}x${Math.round(rect.h)}`;
+      }
+      dragStart = null;
+      draftRect = null;
+      drawImage();
+    });
+
+    function normalizeRect(r) {
+      return {
+        x: Math.max(0, Math.min(r.x, canvas.width)),
+        y: Math.max(0, Math.min(r.y, canvas.height)),
+        w: Math.max(1, Math.min(r.w, canvas.width - Math.min(r.x, canvas.width))),
+        h: Math.max(1, Math.min(r.h, canvas.height - Math.min(r.y, canvas.height)))
+      };
+    }
+
+    function getCanvasImageData() {
       const tmp = document.createElement('canvas');
       tmp.width = canvas.width;
       tmp.height = canvas.height;
@@ -264,46 +283,44 @@
       return tctx.getImageData(0, 0, tmp.width, tmp.height);
     }
 
-    function averageColorAtRect(imageData, x, y, w, h) {
-      let r = 0, g = 0, b = 0, count = 0;
-      const x0 = Math.max(0, Math.min(x, imageData.width));
-      const y0 = Math.max(0, Math.min(y, imageData.height));
-      const x1 = Math.max(x0, Math.min(x + w, imageData.width));
-      const y1 = Math.max(y0, Math.min(y + h, imageData.height));
-
-      for (let yy = y0; yy < y1; yy++) {
-        for (let xx = x0; xx < x1; xx++) {
-          const idx = (yy * imageData.width + xx) * 4;
-          r += imageData.data[idx];
-          g += imageData.data[idx + 1];
-          b += imageData.data[idx + 2];
-          count++;
-        }
-      }
-
-      if (count === 0) {
-        return { r: NaN, g: NaN, b: NaN };
-      }
-
-      return { r: r / count, g: g / count, b: b / count };
+    function hexToRgb(hex) {
+      const h = hex.replace('#', '');
+      const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+      const num = Number.parseInt(full, 16);
+      return {
+        r: (num >> 16) & 255,
+        g: (num >> 8) & 255,
+        b: num & 255
+      };
     }
 
     function rgbToHex(r, g, b) {
-      if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) {
-        return '#NaNNaNNaN';
-      }
       return '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
     }
 
-    function colorDistance(a, b) {
-      return Math.sqrt((a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2);
+    function averageColorFromRect(imageData, rect) {
+      let r = 0, g = 0, b = 0, count = 0;
+      const x0 = Math.max(0, Math.min(Math.floor(rect.x), imageData.width));
+      const y0 = Math.max(0, Math.min(Math.floor(rect.y), imageData.height));
+      const x1 = Math.max(x0, Math.min(Math.ceil(rect.x + rect.w), imageData.width));
+      const y1 = Math.max(y0, Math.min(Math.ceil(rect.y + rect.h), imageData.height));
+      for (let y = y0; y < y1; y++) {
+        for (let x = x0; x < x1; x++) {
+          const idx = (y * imageData.width + x) * 4;
+          r += imageData.data[idx];
+          g += imageData.data[idx + 1];
+          b += imageData.data[idx + 2];
+          count++; 
+        }
+      }
+      return {
+        r: r / count,
+        g: g / count,
+        b: b / count
+      };
     }
 
-    function classifyColor(c) {
-      if (!Number.isFinite(c.r) || !Number.isFinite(c.g) || !Number.isFinite(c.b)) {
-        return 'unknown';
-      }
-
+    function rgbToName(rgb) {
       const palette = {
         red: { r: 255, g: 0, b: 0 },
         green: { r: 0, g: 180, b: 0 },
@@ -320,64 +337,13 @@
       let bestName = 'unknown';
       let bestDist = Infinity;
       for (const [name, color] of Object.entries(palette)) {
-        const d = colorDistance(c, color);
-        if (d < bestDist) {
-          bestDist = d;
+        const dist = Math.sqrt((rgb.r - color.r) ** 2 + (rgb.g - color.g) ** 2 + (rgb.b - color.b) ** 2);
+        if (dist < bestDist) {
+          bestDist = dist;
           bestName = name;
         }
       }
-      if (bestDist > 120) bestName = 'unknown';
-      return bestName;
-    }
-
-    function getCellGridData(imageData, rect, rows, cols) {
-      const grid = [];
-      const cellW = rect.w / cols;
-      const cellH = rect.h / rows;
-
-      for (let y = 0; y < rows; y++) {
-        const row = [];
-        for (let x = 0; x < cols; x++) {
-          const cx = Math.round(rect.x + x * cellW + cellW / 2);
-          const cy = Math.round(rect.y + y * cellH + cellH / 2);
-          const sampleSize = Math.max(4, Math.min(cellW, cellH) * 0.35);
-          const avg = averageColorAtRect(
-            imageData,
-            Math.max(0, cx - sampleSize / 2),
-            Math.max(0, cy - sampleSize / 2),
-            Math.max(3, sampleSize),
-            Math.max(3, sampleSize)
-          );
-          const name = classifyColor(avg);
-          row.push({
-            x,
-            y,
-            rgb: avg,
-            name,
-            hex: rgbToHex(avg.r, avg.g, avg.b),
-            center: { x: cx, y: cy }
-          });
-        }
-        grid.push(row);
-      }
-      return grid;
-    }
-
-    function estimateGoalColor(imageData, rect) {
-      const sampleW = Math.max(4, Math.floor(rect.w * 0.5));
-      const sampleH = Math.max(4, Math.floor(rect.h * 0.5));
-      const sx = Math.round(rect.x + rect.w * 0.25);
-      const sy = Math.round(rect.y + rect.h * 0.25);
-      const avg = averageColorAtRect(imageData, sx, sy, sampleW, sampleH);
-      const name = classifyColor(avg);
-      return {
-        r: avg.r,
-        g: avg.g,
-        b: avg.b,
-        name,
-        rgb: avg,
-        hex: rgbToHex(avg.r, avg.g, avg.b)
-      };
+      return bestDist > 120 ? 'unknown' : bestName;
     }
 
     function cloneBoard(board) {
@@ -396,59 +362,60 @@
       const cols = board[0].length;
       for (let y = 0; y < rows; y++) {
         for (let x = 0; x <= cols - 3; x++) {
-          if (
-            board[y][x].name === goalName &&
-            board[y][x + 1].name === goalName &&
-            board[y][x + 2].name === goalName
-          ) {
-            runs++;
-          }
+          if (board[y][x].name === goalName && board[y][x + 1].name === goalName && board[y][x + 2].name === goalName) runs++;
         }
       }
       for (let x = 0; x < cols; x++) {
         for (let y = 0; y <= rows - 3; y++) {
-          if (
-            board[y][x].name === goalName &&
-            board[y + 1][x].name === goalName &&
-            board[y + 2][x].name === goalName
-          ) {
-            runs++;
-          }
+          if (board[y][x].name === goalName && board[y + 1][x].name === goalName && board[y + 2][x].name === goalName) runs++;
         }
       }
       return runs;
     }
 
-    function findBestMoveForGoal(boardGrid, goal) {
-      const goalName = goal.name || 'unknown';
-      if (goalName === 'unknown') return null;
+    function buildBoardMatrixFromWholeImage(imageData, rows, cols) {
+      const grid = [];
+      const cellW = imageData.width / cols;
+      const cellH = imageData.height / rows;
+      for (let y = 0; y < rows; y++) {
+        const row = [];
+        for (let x = 0; x < cols; x++) {
+          const cx = Math.round((x + 0.5) * cellW);
+          const cy = Math.round((y + 0.5) * cellH);
+          const sampleSize = 6;
+          const color = averageColorFromRect(imageData, {
+            x: Math.max(0, cx - sampleSize),
+            y: Math.max(0, cy - sampleSize),
+            w: sampleSize * 2,
+            h: sampleSize * 2
+          });
+          const name = rgbToName(color);
+          row.push({ x, y, name, hex: rgbToHex(color.r, color.g, color.b), rgb: color });
+        }
+        grid.push(row);
+      }
+      return grid;
+    }
 
-      let best = null;
+    function findBestMoveForColor(boardGrid, goalName) {
+      if (!goalName || goalName === 'unknown') return null;
       const board = cloneBoard(boardGrid);
-
+      let best = null;
       for (let y = 0; y < board.length; y++) {
         for (let x = 0; x < board[0].length; x++) {
           const neighbors = [];
           if (x + 1 < board[0].length) neighbors.push({ x: x + 1, y });
           if (y + 1 < board.length) neighbors.push({ x, y: y + 1 });
-
           for (const n of neighbors) {
             const test = cloneBoard(board);
             swap(test, { x, y }, n);
             const score = countGoalRuns(test, goalName);
-            if (score > 0) {
-              if (!best || score > best.score) {
-                best = {
-                  from: { x, y },
-                  to: n,
-                  score
-                };
-              }
+            if (score > 0 && (!best || score > best.score)) {
+              best = { from: { x, y }, to: n, score };
             }
           }
         }
       }
-
       return best;
     }
   </script>
