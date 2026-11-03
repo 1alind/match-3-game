@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Match-3 Goal Solver</title>
+<style>
+:root{color-scheme:dark;--bg:#10131b;--panel:#191f2b;--line:#30394b;--muted:#aab4c6;--accent:#8b7cff;--good:#65d6a3}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(145deg,#10131b,#171b29);color:#eef2fa;font:15px system-ui,-apple-system,Segoe UI,sans-serif}
+main{max-width:1050px;margin:auto;padding:18px}h1{font-size:25px;margin:4px 0}h2{font-size:17px;margin:0 0 12px}p{color:var(--muted);line-height:1.45}.sub{margin:4px 0 18px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:15px;margin:12px 0}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.row>*{flex:1}
+button,.filebtn{background:#292f42;color:#fff;border:1px solid #424c65;border-radius:10px;padding:10px 13px;font-weight:650;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#100d25}button:disabled{opacity:.45;cursor:not-allowed}
+input,select{width:100%;background:#101521;color:#fff;border:1px solid #3a455b;border-radius:9px;padding:10px;margin-top:5px}
+label{font-size:13px;color:#c8d0df}small,.hint{color:var(--muted);font-size:12px}
+#previewWrap{position:relative;display:none;max-width:100%;overflow:auto;background:#080a10;border-radius:12px}
+canvas{display:block;max-width:100%;height:auto;touch-action:pan-y}
+#board{display:grid;gap:4px;justify-content:start;overflow:auto;padding:8px;background:#0e121b;border-radius:12px}
+.cell{width:39px;height:39px;border:1px solid #48516a;border-radius:8px;display:grid;place-items:center;font-size:19px;font-weight:800;cursor:pointer;user-select:none;background:#30384b}
+.cell.empty{background:#121722;border-style:dashed;color:#647087}.cell.block{background:#727d90}.cell.crate{background:#72513d}.cell.ice{background:#9edcf0;color:#14394b}.cell.lock{background:#c6a64c;color:#33270c}
+.piece-r{background:#bd4857}.piece-g{background:#398f67}.piece-b{background:#397cbe}.piece-y{background:#c69b36}.piece-p{background:#9764bd}.piece-o{background:#d77b38}
+.goals{display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:9px}.goal{border:1px solid var(--line);border-radius:10px;padding:8px}
+.goal label{display:flex;align-items:center;gap:6px}.dot{width:12px;height:12px;border-radius:50%;display:inline-block}
+#results{display:grid;gap:8px}.move{border:1px solid var(--line);border-radius:10px;padding:11px;background:#141a26}.move.best{border-color:var(--good)}.move strong{color:#fff}.move p{margin:5px 0 0;font-size:13px}
+.badge{display:inline-block;padding:3px 7px;border-radius:6px;background:#30394b;font-size:11px;margin-left:5px}
+.warn{border-left:3px solid #e6b85c;padding:8px 11px;background:#292316;color:#f0d7a1;border-radius:5px;font-size:13px}
+#status{color:var(--good);font-size:13px;min-height:18px}
+@media(max-width:560px){main{padding:11px}.panel{padding:12px}.cell{width:34px;height:34px;font-size:16px}}
+</style>
+</head>
+<body><main>
+<h1>🎯 Match-3 Goal Solver</h1>
+<p class="sub">Upload a screenshot, mark the board, set the goals, then rank moves by goal progress.</p>
+<section class="panel"><h2>1. Screenshot and board area</h2>
+<div class="row"><label class="filebtn">Choose screenshot<input id="file" type="file" accept="image/*" hidden></label><button id="cropMode" disabled>Drag to select board</button></div>
+<div id="previewWrap"><canvas id="imageCanvas"></canvas></div>
+<p class="hint">Load an image, select the playable grid, then estimate its tile colors. Recognition is a starting point, so review the cells.</p>
+<div class="row"><label>Rows<input id="rows" type="number" min="3" max="14" value="8"></label><label>Columns<input id="cols" type="number" min="3" max="14" value="8"></label><label>Moves left<input id="movesLeft" type="number" min="1" max="99" value="16"></label></div>
+<button id="detect" disabled>Estimate cells from selected area</button></section>
+<section class="panel"><h2>2. Board editor</h2><p class="hint">Tap a cell to cycle through colors, obstacles, and empty cells.</p><div id="board"></div><div class="row" style="margin-top:10px"><button id="clear">Clear board</button><button id="sample">Load sample board</button></div></section>
+<section class="panel"><h2>3. Goals</h2><p class="hint">Enter remaining target counts. Leave other colors at zero.</p><div class="goals" id="goals"></div></section>
+<section class="panel"><h2>4. Search</h2><div class="row"><label>Lookahead depth<select id="depth"><option value="1">1 move</option><option value="2" selected>2 moves</option><option value="3">3 moves</option></select></label><label>Search width<select id="width"><option value="20">20 states</option><option value="50" selected>50 states</option><option value="100">100 states</option></select></label></div><button class="primary" id="solve">Find best moves</button><p id="status"></p><div id="results"></div></section>
+<div class="warn">Prototype limitations: goal counters are entered manually; tile recognition is a color estimate; obstacles and gravity use simplified rules. Special pieces, chained effects, portals, and game-specific refill rules are not modeled yet.</div>
+</main>
+<script>
+const $=id=>document.getElementById(id),colors=['r','g','b','y','p','o'],names={r:'Red',g:'Green',b:'Blue',y:'Yellow',p:'Purple',o:'Orange'},symbols={r:'●',g:'●',b:'●',y:'●',p:'●',o:'●',crate:'▦',ice:'❄',block:'▣',lock:'🔒',empty:''},cycle=['r','g','b','y','p','o','crate','ice','block','lock','empty'],palette={r:[190,65,80],g:[55,145,100],b:[55,120,190],y:[205,160,50],p:[150,95,185],o:[220,120,45]};
+let board=[],R=8,C=8,img=null,rect=null,selecting=false,start=null;const canvas=$('imageCanvas'),ctx=canvas.getContext('2d');
+function initGoals(){$('goals').innerHTML='';for(const k of colors){let d=document.createElement('div');d.className='goal';d.innerHTML=`<label><span class="dot" style="background:rgb(${palette[k].join(',')})"></span>${names[k]}</label><input type="number" min="0" max="999" value="0" id="goal-${k}">`;$('goals').append(d)}}
+function resizeBoard(r,c,fill='empty'){R=r;C=c;board=Array.from({length:R*C},()=>fill);renderBoard()}
+function renderBoard(){let el=$('board');el.style.gridTemplateColumns=`repeat(${C},39px)`;el.innerHTML='';board.forEach((v,i)=>{let d=document.createElement('div');d.className='cell '+(colors.includes(v)?'piece-'+v:v);d.textContent=symbols[v]||'';d.title=`Row ${Math.floor(i/C)+1}, column ${i%C+1}: ${v}`;d.onclick=()=>{let n=cycle.indexOf(board[i]);board[i]=cycle[(n+1)%cycle.length];renderBoard()};el.append(d)})}
+$('file').onchange=e=>{if(!e.target.files[0])return;img=new Image();img.onload=()=>{canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;ctx.drawImage(img,0,0);$('previewWrap').style.display='block';$('cropMode').disabled=false;$('detect').disabled=false;rect=null};img.src=URL.createObjectURL(e.target.files[0])};
+$('cropMode').onclick=()=>{selecting=true;$('cropMode').textContent='Drag on image…';$('previewWrap').style.cursor='crosshair'};
+function pos(e){let b=canvas.getBoundingClientRect();return{x:(e.clientX-b.left)*canvas.width/b.width,y:(e.clientY-b.top)*canvas.height/b.height}}
+canvas.addEventListener('pointerdown',e=>{if(selecting){start=pos(e);canvas.setPointerCapture(e.pointerId)}});
+canvas.addEventListener('pointerup',e=>{if(!selecting||!start)return;let p=pos(e);rect={x:Math.min(start.x,p.x),y:Math.min(start.y,p.y),w:Math.abs(start.x-p.x),h:Math.abs(start.y-p.y)};selecting=false;start=null;$('cropMode').textContent='Board area selected ✓';$('previewWrap').style.cursor='default';drawOverlay()});
+function drawOverlay(){ctx.drawImage(img,0,0);if(rect){ctx.strokeStyle='#fff';ctx.lineWidth=Math.max(3,canvas.width/300);ctx.strokeRect(rect.x,rect.y,rect.w,rect.h)}}
+function nearest(rgb){let best='empty',dist=1e9;for(let k of colors){let p=palette[k],d=(rgb[0]-p[0])**2+(rgb[1]-p[1])**2+(rgb[2]-p[2])**2;if(d<dist){dist=d;best=k}}return dist>21000?'empty':best}
+$('detect').onclick=()=>{if(!rect||!img){$('status').textContent='Select the board area first.';return}let r=Math.max(3,Math.min(14,+$('rows').value||8)),c=Math.max(3,Math.min(14,+$('cols').value||8));resizeBoard(r,c);let tmp=document.createElement('canvas'),w=Math.max(1,Math.round(rect.w)),h=Math.max(1,Math.round(rect.h));tmp.width=w;tmp.height=h;let t=tmp.getContext('2d');t.drawImage(img,rect.x,rect.y,rect.w,rect.h,0,0,w,h);let data=t.getImageData(0,0,w,h).data;for(let y=0;y<r;y++)for(let x=0;x<c;x++){let cx=Math.floor((x+.5)*w/c),cy=Math.floor((y+.5)*h/r),sum=[0,0,0],n=0,rad=Math.max(2,Math.floor(Math.min(w/c,h/r)*.10));for(let yy=cy-rad;yy<=cy+rad;yy++)for(let xx=cx-rad;xx<=cx+rad;xx++){let q=(Math.max(0,Math.min(h-1,yy))*w+Math.max(0,Math.min(w-1,xx)))*4;sum[0]+=data[q];sum[1]+=data[q+1];sum[2]+=data[q+2];n++}board[y*c+x]=nearest(sum.map(v=>v/n))}renderBoard();drawOverlay();$('status').textContent='Estimate ready. Review and correct the board before solving.'};
+$('clear').onclick=()=>resizeBoard(R,C,'empty');
+$('sample').onclick=()=>{R=7;C=7;board=['r','g','b','r','y','p','g','g','b','r','y','p','g','r','b','r','g','p','r','y','b','r','g','b','crate','y','p','g','g','b','r','y','ice','g','r','b','r','g','p','r','y','b','r','g','b','r','y','p','g'];renderBoard();$('rows').value=R;$('cols').value=C;$('goal-r').value=8;$('goal-g').value=8;$('goal-b').value=0};
+initGoals();resizeBoard(R,C);
+function goalsNow(){let o={};for(let k of colors)o[k]=Math.max(0,+$('goal-'+k).value||0);return o}
+function idx(r,c){return r*C+c}
+function findMatches(b){let set=new Set();for(let r=0;r<R;r++)for(let c=0;c<C;c++){let k=b[idx(r,c)];if(!colors.includes(k))continue;let n=1;while(c+n<C&&b[idx(r,c+n)]===k)n++;if(n>=3)for(let q=0;q<n;q++)set.add(idx(r,c+q));n=1;while(r+n<R&&b[idx(r+n,c)]===k)n++;if(n>=3)for(let q=0;q<n;q++)set.add(idx(r+q,c))}return set}
+function cloneState(s){return{b:s.b.slice(),g:{...s.g},first:s.first,depth:s.depth,score:s.score}}
+function settle(b){for(let c=0;c<C;c++){let write=R-1;for(let r=R-1;r>=0;r--){let i=idx(r,c),v=b[i];if(v==='block'||v==='lock'){write=r-1;continue}if(v!=='empty'&&v!=='crate'&&v!=='ice'){let dest=idx(write,c);if(dest!==i){b[dest]=v;b[i]='empty'}write--}}}}
+function damageNear(b,m){for(let i of m){let r=Math.floor(i/C),c=i%C;for(let[dr,dc]of[[1,0],[-1,0],[0,1],[0,-1]]){let y=r+dr,x=c+dc;if(y<0||x<0||y>=R||x>=C)continue;let j=idx(y,x);if(b[j]==='crate'||b[j]==='ice'||b[j]==='lock')b[j]=b[j]==='lock'?'crate':'empty'}}}
+function resolve(b,g){let loops=0;while(loops++<8){let m=findMatches(b);if(!m.size)break;for(let i of m){let k=b[i];if(g[k]>0)g[k]--;b[i]='empty'}damageNear(b,m);settle(b)}}
+function swapState(b,a,z){let x=b.slice();[x[a],x[z]]=[x[z],x[a]];return x}
+function legalMoves(b){let out=[];for(let r=0;r<R;r++)for(let c=0;c<C;c++){let a=idx(r,c);if(!colors.includes(b[a]))continue;for(let[dr,dc]of[[1,0],[0,1]]){let y=r+dr,x=c+dc;if(y>=R||x>=C)continue;let z=idx(y,x);if(!colors.includes(b[z]))continue;let q=swapState(b,a,z);if(findMatches(q).size)out.push([a,z])}}return out}
+function remaining(g){return colors.reduce((s,k)=>s+g[k],0)}
+function heuristic(s,initial){let done=colors.reduce((n,k)=>n+initial[k]-s.g[k],0);return done*100-remaining(s.g)*2}
+function search(){let initial=goalsNow(),beam=[{b:board.slice(),g:initial,first:null,depth:0}],width=+$('width').value,depth=+$('depth').value,candidates=[];for(let d=1;d<=depth;d++){let next=[];for(let s of beam)for(let[a,z]of legalMoves(s.b)){let ns=cloneState(s);ns.b=swapState(s.b,a,z);ns.first=ns.first||[a,z];ns.depth=d;let before=remaining(ns.g);resolve(ns.b,ns.g);ns.score=heuristic(ns,initial)+(before-remaining(ns.g))*8;candidates.push(ns);next.push(ns);if(!remaining(ns.g))return[ns]}next.sort((a,b)=>b.score-a.score);let seen=new Set();beam=[];for(let s of next){let key=s.b.join('')+'|'+colors.map(k=>s.g[k]).join(',');if(seen.has(key))continue;seen.add(key);beam.push(s);if(beam.length>=width)break}if(!beam.length)break}return candidates.sort((a,b)=>b.score-a.score).slice(0,3)}
+function coord(i){return`row ${Math.floor(i/C)+1}, col ${i%C+1}`}
+$('solve').onclick=()=>{if(!board.some(v=>colors.includes(v))){$('status').textContent='Load or estimate a board first.';return}if(!remaining(goalsNow())){$('status').textContent='Enter at least one target count.';return}let t=performance.now(),res=search(),ms=Math.round(performance.now()-t);$('results').innerHTML='';if(!res.length){$('status').textContent='No legal match-producing swaps found. Check the board.';return}res.forEach((s,n)=>{let[a,b]=s.first,d=document.createElement('div');d.className='move '+(!n?'best':'');d.innerHTML=`<strong>${n+1}. ${coord(a)} ↔ ${coord(b)}</strong>${!n?'<span class="badge">Best found</span>':''}<p>Depth: ${s.depth} · Remaining target pieces: ${remaining(s.g)}</p>`;$('results').append(d)});$('status').textContent=`Search complete in ${ms} ms. Results are heuristic estimates.`};
+</script></body></html>
